@@ -1,0 +1,15 @@
+name: ci 
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+concurrency:
+  group: ci-${{github.ref}}-${{github.event.pull_request.number || github.run_number}}
+  cancel-in-progress: true
+
+jobs:
+  formatting:
+    uses: ./.github/workflows/formatting.yaml

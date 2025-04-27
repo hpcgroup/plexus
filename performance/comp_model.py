@@ -1,0 +1,48 @@
+import math
+
+
+def split_into_three_powers_of_two(G):
+    if G <= 0 or (G & (G - 1)) != 0:
+        raise ValueError("G must be a positive power of 2.")
+
+    log_G = int(math.log2(G))
+    splits = []
+
+    # Iterate over all possible values for a and b
+    for a in range(log_G + 1):
+        for b in range(log_G + 1 - a):
+            c = log_G - a - b
+            if c >= 0:  # Ensure c is non-negative
+                splits.append((2**a, 2**b, 2**c))
+
+    return splits
+
+
+# don't include number of classes in D_list
+def comp_model(N, NNZ, G, D_list):
+    cost_dict = dict()
+    for x, y, z in split_into_three_powers_of_two(G):
+        flops_cost, fwd_penalty, bwd_penalty = 0, 0, 0
+        for i in range(len(D_list)):
+            flops_cost += (
+                NNZ
+                * D_list[i]
+                / ([x, z, y][(i + 1) % 3] * [x, z, y][i % 3] * [x, z, y][(i + 2) % 3])
+            )
+
+            fwd_penalty += (N * [x, z, y][(i + 2) % 3]) / (D_list[i] * [x, z, y][i % 3])
+
+            bwd_penalty += (N * [x, z, y][(i + 2) % 3]) / (
+                D_list[i] * [x, z, y][(i + 1) % 3]
+            )
+
+        curr_cost = flops_cost + fwd_penalty + bwd_penalty
+
+        cost_dict[(x, y, z)] = (curr_cost, flops_cost, fwd_penalty, bwd_penalty)
+    cost_dict = dict(sorted(cost_dict.items(), key=lambda kv: kv[1][0]))
+    return cost_dict
+
+
+if __name__ == "__main__":
+    x = comp_model(2449029, 126167053, 64, [100, 128, 128])
+    print(x.keys())
