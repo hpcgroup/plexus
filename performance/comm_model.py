@@ -76,6 +76,18 @@ def get_bw(ip, my, GPUS_PER_NODE, version, machine):
 
 
 def compute_config_costs(G, N, D_list, version, machine):
+    """
+    Args:
+        G - number of gpus
+        N - number of nodes
+        D_list - list of features at each layer (ex: 3 GCN layers with 128 hidden dim, 100 feature size, 60 classes [100, 128, 128, 60])
+        version - "v1 for placement/bandwidth agnostic, v2 for placement aware with theoretical bandwidth, v3 for placement aware with empirical bandwidths"
+        machine - currently supports perlmutter and frontier, but bandwidths for other machines can also be added
+
+    Returns:
+        Estimated communication time (ms) for each 3D config
+    """
+
     if machine == "perlmutter":
         GPUS_PER_NODE = 4
     elif machine == "frontier":
@@ -195,7 +207,3 @@ def compute_config_costs(G, N, D_list, version, machine):
     config_to_cost = dict(sorted(config_to_cost.items(), key=lambda item: item[1]))
 
     return config_to_cost
-
-
-if __name__ == "__main__":
-    print(compute_config_costs(64, 2449029, [100, 128, 128, 47], "v3", "perlmutter"))

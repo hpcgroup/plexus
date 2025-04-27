@@ -19,7 +19,18 @@ def split_into_three_powers_of_two(G):
 
 
 # don't include number of classes in D_list
-def comp_model(N, NNZ, G, D_list):
+def comp_model(N, NNZ, G, D_list, coef=[1, 1, 1]):
+    """
+    Args:
+        N - number of nodes in graph
+        NNZ - number of nonzeros in graph's adjacency matrix
+        D_list - list of features at each layer excluding number of classes (ex: 3 GCN layers with 128 hidden dim, 100 feature size, [100, 128, 128])
+        coef - coefficients to multiply the three terms of the model by to get times in ms (default coefficients don't result in meaningful times, but give an ordering of the configs
+
+    Returns:
+        Estimated SpMM time (ms) for each 3D config
+    """
+
     cost_dict = dict()
     for x, y, z in split_into_three_powers_of_two(G):
         flops_cost, fwd_penalty, bwd_penalty = 0, 0, 0
@@ -36,13 +47,12 @@ def comp_model(N, NNZ, G, D_list):
                 D_list[i] * [x, z, y][(i + 1) % 3]
             )
 
-        curr_cost = flops_cost + fwd_penalty + bwd_penalty
+        cost_dict[(x, y, z)] = (
+            (coef[0] * (flops_cost**0.5))
+            + (coef[1] * (flops_cost**0.5) * fwd_penalty)
+            + (coef[2] * (flops_cost**0.5) * bwd_penalty)
+        )
 
-        cost_dict[(x, y, z)] = (curr_cost, flops_cost, fwd_penalty, bwd_penalty)
-    cost_dict = dict(sorted(cost_dict.items(), key=lambda kv: kv[1][0]))
+    cost_dict = dict(sorted(cost_dict.items(), key=lambda kv: kv[1]))
+
     return cost_dict
-
-
-if __name__ == "__main__":
-    x = comp_model(2449029, 126167053, 64, [100, 128, 128])
-    print(x.keys())

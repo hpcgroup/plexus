@@ -18,8 +18,18 @@ def split_into_three_powers_of_two(G):
     return splits
 
 
-# only for dense matrices
 def compute_config_mem(G, N, E, D_list):
+    """
+    Args:
+        G - number of GPUs
+        N - number of nodes in graph
+        E - number of nonzeros in graph's adjacency matrix
+        D_list - list of features at each layer (ex: 3 GCN layers with 128 hidden dim, 100 feature size, 60 classes [100, 128, 128, 60])
+
+    Returns:
+        Approximate gpu memory usage (GB) for each 3D config
+    """
+
     config_to_mem = {}
     for X, Y, Z in split_into_three_powers_of_two(G):
         # assuming E is roughly evenly distributed after permutation
@@ -73,6 +83,3 @@ def compute_config_mem(G, N, E, D_list):
     config_to_mem = dict(sorted(config_to_mem.items(), key=lambda item: item[1]))
 
     return config_to_mem
-
-
-print(compute_config_mem(16, 23947347, 57708624, D_list=[128, 128, 128, 32]))

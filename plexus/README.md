@@ -4,7 +4,7 @@
 
 -   **cross_entropy.py**: This file provides a parallel implementation of the cross-entropy loss function, a standard loss function used for node-level classification.
 
--   **utils/**: This subdirectory contains several utility modules that provide essential functionalities for the Plexus framework:
+-   **utils**: This subdirectory contains several utility modules that provide essential functionalities for the Plexus framework:
 
     -   **general.py**: This module includes generic utility functions used throughout the framework, including the following.
         -   setting s random seed for reproducible experiments.

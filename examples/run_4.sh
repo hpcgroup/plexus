@@ -1,15 +1,14 @@
 #!/bin/bash
-#SBATCH -q regular
 #SBATCH --time=00:10:00
 #SBATCH --gpus-per-node=4
-#SBATCH -A m2404_g
-#SBATCH --nodes=16
+#SBATCH -A <account>
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
-#SBATCH -C gpu&hbm80g 
+#SBATCH -C gpu 
 
 module load nccl
 module load cudatoolkit/12.4
-source $SCRATCH/gnn-env/bin/activate
+source <path/to/venv/bin/activate>
 
 NNODES=$SLURM_JOB_NUM_NODES
 GPUS=$(( NNODES * 4 ))
@@ -23,7 +22,7 @@ export WORLD_SIZE=${GPUS}
 ## nccl env vars to speedup stuff
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 export NCCL_NET_GDR_LEVEL=PHB
-export CUDA_VISIBLE_DEVICES=3,2,1,0  # Retained as requested
+export CUDA_VISIBLE_DEVICES=3,2,1,0
 export NCCL_CROSS_NIC=1
 export NCCL_SOCKET_IFNAME=hsn
 export FI_CXI_RDZV_EAGER_SIZE=0
@@ -44,21 +43,10 @@ G_INTRA_C=$2
 G_INTRA_D=$3
 TRIAL_NUM=$4
 
-export PYTORCH_CUDA_ALLOC_CONF="expandable_segments:True"
+SCRIPT="train.py --G_intra_r ${G_INTRA_R} --G_intra_c ${G_INTRA_C} --G_intra_d ${G_INTRA_D} --gpus_per_node ${GPUS_PER_NODE} --num_epochs 10"
+SCRIPT="$SCRIPT --data_dir <path/to/dataset>"
 
-SCRIPT="../../../main/train.py \
-    --G_intra_r ${G_INTRA_R} \
-    --G_intra_c ${G_INTRA_C} \
-    --G_intra_d ${G_INTRA_D} \
-    --gpus_per_node ${GPUS_PER_NODE} \
-    --num_epochs 10 \
-    --data_dir $SCRATCH/gnn-env/gnn-datasets/partitioned_papers"
-
-RESULT_DIR="../../../results/papers/perlmutter/${GPUS}/${TRIAL_NUM}"
-mkdir -p "$RESULT_DIR"
-
-run_cmd="srun -N $NNODES -n $GPUS -c 32 --cpu-bind=cores --gpus-per-node=4 ../.././get_rank.sh python -u $SCRIPT > $RESULT_DIR/papers_X${G_INTRA_R}Y${G_INTRA_C}Z${G_INTRA_D}.txt 2>&1"
+run_cmd="srun -N $NNODES -n $GPUS -c 32 --cpu-bind=cores --gpus-per-node=4 ./get_rank.sh python -u $SCRIPT > <path/to/save/results/to>/<dataset/output/file/name>_X${G_INTRA_R}Y${G_INTRA_C}Z${G_INTRA_D}_${TRIAL_NUM}.txt 2>&1"
 
 echo $run_cmd
 eval $run_cmd
-
