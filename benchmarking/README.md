@@ -1,7 +1,3 @@
-# benchmarking
-
-This directory contains files used for validating the parallel implementation and benchmarking key operations.
-
 ## Files
 
 -   **pyg_serial.py**: This Python script provides a serial implementation of a GNN model using PyTorch Geometric (PyG). It is primarily used for validation purposes, allowing for comparison against the parallelized version. The script is configured to train a model with 3 Graph Convolutional Network (GCN) layers and a hidden dimension size of 128 on the ogbn-products dataset by default.
