@@ -507,24 +507,3 @@ def partition_graph_2d(file_path: str, num_partitions: int, output_dir: str):
         for future in futures:
             future.result()  # Ensure completion
 
-
-if __name__ == "__main__":
-    # don't delete these two lines
-    set_seed(0)
-    torch.serialization.add_safe_globals(
-        [dtype, scalar, GlobalStorage, DataEdgeAttr, DataTensorAttr]
-    )
-
-    """
-    preprocess_graph(
-        "papers",
-        "/pscratch/sd/a/aranjan/gnn-env/gnn-datasets/original",
-        "/pscratch/sd/a/aranjan/gnn-env/gnn-datasets/papers",
-    )
-    """
-
-    partition_graph_2d(
-        "/pscratch/sd/a/aranjan/gnn-env/gnn-datasets/papers/processed_papers.pt",
-        16,
-        "/pscratch/sd/a/aranjan/gnn-env/gnn-datasets/partitioned_papers",
-    )

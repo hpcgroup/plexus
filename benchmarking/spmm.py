@@ -5,7 +5,7 @@ import torch.sparse
 
 
 def multiply_sharded_matrices_padded(
-    pt_file
+    pt_file,
     shard_row,
     shard_col,
     shard_x_col,
@@ -36,14 +36,8 @@ def multiply_sharded_matrices_padded(
         original_x_cols = x.shape[1]
 
         # Calculate padded dimensions for edge_index (implied adjacency matrix)
-        padded_rows = (
-            (original_num_nodes + shard_row - 1) // shard_row * shard_row
-        )
-        padded_cols_x = (
-            (original_num_nodes + shard_col - 1)
-            // shard_col
-            * shard_col
-        )
+        padded_rows = (original_num_nodes + shard_row - 1) // shard_row * shard_row
+        padded_cols_x = (original_num_nodes + shard_col - 1) // shard_col * shard_col
 
         # Calculate padded dimensions for x
         padded_x_rows = (
@@ -54,9 +48,7 @@ def multiply_sharded_matrices_padded(
             padded_x_cols = original_x_cols
         else:
             padded_x_cols = (
-                (original_x_cols + shard_x_col - 1)
-                // shard_x_col
-                * shard_x_col
+                (original_x_cols + shard_x_col - 1) // shard_x_col * shard_x_col
             )
 
         # Calculate shard sizes for padded dimensions
@@ -99,7 +91,10 @@ def multiply_sharded_matrices_padded(
         x_end_col = x_col_shard_size
         sharded_x = padded_x[x_start_row:x_end_row, x_start_col:x_end_col]
 
-        print("Theoretical # of FLOPs (2 * NNZ * D): " + str(2 * sharded_adj_t._nnz() * sharded_x.shape[1]))
+        print(
+            "Theoretical # of FLOPs (2 * NNZ * D): "
+            + str(2 * sharded_adj_t._nnz() * sharded_x.shape[1])
+        )
 
         # Move tensors to CUDA if available
         if torch.cuda.is_available():
@@ -151,7 +146,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "pt_file",
         type=int,
-        help="Path to plexus processed .pt file containing the data"
+        help="Path to plexus processed .pt file containing the data",
     )
     parser.add_argument(
         "shard_row",
@@ -189,5 +184,5 @@ if __name__ == "__main__":
         args.shard_col,
         args.shard_x_col,
         args.iterations,
-        args.warmup
+        args.warmup,
     )

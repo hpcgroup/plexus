@@ -31,7 +31,9 @@ def create_parser():
 
 
 def get_dataset(download_path=None):
-    dataset = PygNodePropPredDataset(name="ogbn-products", root=input_dir, transform=T.NormalizeFeatures())
+    dataset = PygNodePropPredDataset(
+        name="ogbn-products", root=input_dir, transform=T.NormalizeFeatures()
+    )
     gcn_norm = T.GCNNorm()
     return (gcn_norm.forward(dataset[0]), dataset.num_classes)
 
