@@ -1,6 +1,23 @@
 ## Files
 
--   **train.py**: This file contains the model definition, data loading, training loop, and other essential components for training a GNN.
+-   **train.py**: This file contains the model definition (currently 3 GCN layers with 128 hidden dimension size), data loading, training loop, and other essential components for training a GNN.
+This script has various command-line arguments, including:
+
+  * `--seed` (optional): Sets the random seed for all GPUs. If not provided, the default seed of 0 is used.
+
+  * `--G_intra_r`: Specifies the X dimension of the 3D parallelism configuration (default: 1).
+
+  * `--G_intra_c`: Specifies the Y dimension of the 3D parallelism configuration (default: 1).
+
+  * `--G_intra_d`: Specifies the Z dimension of the 3D parallelism configuration (default: 1).
+
+  * `--gpus_per_node`: Specifies the number of GPUs available on each node.
+
+  * `--data_dir`: Specifies the directory containing the dataset, which can be either in unpartitioned or partitioned format.
+
+  * `--num_epochs` (optional): Determines the number of training epochs (default: 2).
+
+  * `--overlap` (optional): If set (`--overlap`), enables overlapping of SpMM and all-reduce in the aggregation.
 
 -   **run_4.sh**: This is an example shell script for Perlmutter, demonstrating how to run a Plexus-parallelized GNN on 4 GPUs.  It includes placeholders that should be replaced with appropriate values for specific experiments, such as dataset path, output directory, etc. The script can be adapted to run on different numbers of GPUs and with different datasets.
 
