@@ -1,5 +1,7 @@
 # Plexus
 
+Plexus is a 3D parallel framework designed for large-scale distributed GNN training.
+
 ## Directory Structure
 
 -   **benchmarking**: Contains a serial implementation using PyTorch Geometric (PyG) for validation and testing. Additionally, it includes utilities for benchmarking Sparse Matrix-Matrix Multiplication (SpMM) operations, a key component in GNN computations.
