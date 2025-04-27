@@ -506,4 +506,3 @@ def partition_graph_2d(file_path: str, num_partitions: int, output_dir: str):
 
         for future in futures:
             future.result()  # Ensure completion
-
