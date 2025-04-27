@@ -1,34 +1,33 @@
-import torch
-import torch.sparse
 import time
+import torch
 import argparse
+import torch.sparse
 
 
-def multiply_partitioned_matrices_padded(
-    partition_row,
-    partition_col_x,
-    partition_x_col,
-    iterations=25,
-    warmup_iterations=5,
-    pt_file="/pscratch/sd/a/aranjan/gnn-env/gnn-datasets/products/processed_products.pt",
+def multiply_sharded_matrices_padded(
+    pt_file
+    shard_row,
+    shard_col,
+    shard_x_col,
+    iterations,
+    warmup_iterations,
 ):
     """
-    Reads a .pt file, pads and partitions the edge_index and x matrices,
-    multiplies the partitions using sparse matrix multiplication, and measures the time.
+    Reads a .pt file, pads and shards the edge_index and x matrices,
+    multiplies the shards using sparse matrix multiplication, and measures the time.
 
     Args:
-        pt_file (str): Path to the .pt file containing the data dictionary.
-        partition_row (int): The number of partitions for the first dimension of edge_index.
-        partition_col_x (int): The number of partitions for the second dimension of edge_index
+        pt_file (str): Path to the .pt file containing the data.
+        shard_row (int): The number of shards for the first dimension of edge_index.
+        shard_col (int): The number of shards for the second dimension of edge_index
                              and the first dimension of x.
-        partition_x_col (int): The number of partitions for the second dimension of x.
+        shard_x_col (int): The number of shards for the second dimension of x.
         iterations (int): The total number of multiplication iterations to perform.
         warmup_iterations (int): The number of initial iterations to exclude from timing.
     """
+
     try:
         data, _ = torch.load(pt_file, weights_only=False)
-
-        print(data.edge_weight[0:100])
 
         edge_index = data.edge_index
         x = data.x
@@ -38,12 +37,12 @@ def multiply_partitioned_matrices_padded(
 
         # Calculate padded dimensions for edge_index (implied adjacency matrix)
         padded_rows = (
-            (original_num_nodes + partition_row - 1) // partition_row * partition_row
+            (original_num_nodes + shard_row - 1) // shard_row * shard_row
         )
         padded_cols_x = (
-            (original_num_nodes + partition_col_x - 1)
-            // partition_col_x
-            * partition_col_x
+            (original_num_nodes + shard_col - 1)
+            // shard_col
+            * shard_col
         )
 
         # Calculate padded dimensions for x
@@ -51,25 +50,25 @@ def multiply_partitioned_matrices_padded(
             padded_cols_x  # Align with the padded columns of the adjacency matrix
         )
 
-        if partition_x_col == 1:
-            padded_x_cols = 128
+        if shard_x_col == 1:
+            padded_x_cols = original_x_cols
         else:
             padded_x_cols = (
-                (original_x_cols + partition_x_col - 1)
-                // partition_x_col
-                * partition_x_col
+                (original_x_cols + shard_x_col - 1)
+                // shard_x_col
+                * shard_x_col
             )
 
-        # Calculate partition sizes for padded dimensions
-        row_partition_size = padded_rows // partition_row
-        col_partition_x_size = padded_cols_x // partition_col_x
-        x_col_partition_size = padded_x_cols // partition_x_col
+        # Calculate shard sizes for padded dimensions
+        row_shard_size = padded_rows // shard_row
+        col_shard_x_size = padded_cols_x // shard_col
+        x_col_shard_size = padded_x_cols // shard_x_col
 
-        # Extract the first partition of padded_adj_indices
+        # Extract the first shard of padded_adj_indices
         start_row = 0
-        end_row = row_partition_size
+        end_row = row_shard_size
         start_col = 0
-        end_col = col_partition_x_size
+        end_col = col_shard_x_size
 
         relevant_edges_mask = (
             (edge_index[0] >= start_row)
@@ -77,35 +76,35 @@ def multiply_partitioned_matrices_padded(
             & (edge_index[1] >= start_col)
             & (edge_index[1] < end_col)
         )
-        partitioned_edge_index = edge_index[:, relevant_edges_mask]
+        sharded_edge_index = edge_index[:, relevant_edges_mask]
 
-        # Adjust the indices in the partitioned_edge_index to be relative to the partition
-        partitioned_edge_index[0] = partitioned_edge_index[0] - start_row
-        partitioned_edge_index[1] = partitioned_edge_index[1] - start_col
+        # Adjust the indices in the sharded_edge_index to be relative to the shard
+        sharded_edge_index[0] = sharded_edge_index[0] - start_row
+        sharded_edge_index[1] = sharded_edge_index[1] - start_col
 
-        # Create the sparse adjacency matrix from the partitioned edge_index
-        partitioned_adj_t = torch.sparse_coo_tensor(
-            partitioned_edge_index,
+        # Create the sparse adjacency matrix from the sharded edge_index
+        sharded_adj_t = torch.sparse_coo_tensor(
+            sharded_edge_index,
             data.edge_weight[relevant_edges_mask],
-            (row_partition_size, col_partition_x_size),
+            (row_shard_size, col_shard_x_size),
         ).to_sparse_csr()
 
         padded_x = torch.zeros((padded_x_rows, padded_x_cols), dtype=x.dtype)
         padded_x[:original_num_nodes, :original_x_cols] = x
 
-        # Extract the first partition of padded_x
+        # Extract the first shard of padded_x
         x_start_row = 0
-        x_end_row = col_partition_x_size
+        x_end_row = col_shard_x_size
         x_start_col = 0
-        x_end_col = x_col_partition_size
-        partitioned_x = padded_x[x_start_row:x_end_row, x_start_col:x_end_col]
+        x_end_col = x_col_shard_size
+        sharded_x = padded_x[x_start_row:x_end_row, x_start_col:x_end_col]
 
-        print("Workload: " + str(partitioned_adj_t._nnz() * partitioned_x.shape[1]))
+        print("Theoretical # of FLOPs (2 * NNZ * D): " + str(2 * sharded_adj_t._nnz() * sharded_x.shape[1]))
 
         # Move tensors to CUDA if available
         if torch.cuda.is_available():
-            partitioned_adj_t = partitioned_adj_t.cuda()
-            partitioned_x = partitioned_x.cuda()
+            sharded_adj_t = sharded_adj_t.cuda()
+            sharded_x = sharded_x.cuda()
 
         # Perform sparse matrix multiplication and measure time
         times = []
@@ -114,7 +113,7 @@ def multiply_partitioned_matrices_padded(
                 torch.cuda.synchronize()
 
             start_time = time.time()
-            result = torch.sparse.mm(partitioned_adj_t, partitioned_x)
+            result = torch.sparse.mm(sharded_adj_t, sharded_x)
 
             if torch.cuda.is_available():
                 torch.cuda.synchronize()
@@ -123,7 +122,7 @@ def multiply_partitioned_matrices_padded(
             else:
                 if i >= warmup_iterations:
                     start_time = time.time()
-                    result = torch.sparse.mm(partitioned_adj_t, partitioned_x)
+                    result = torch.sparse.mm(sharded_adj_t, sharded_x)
                     end_time = time.time()
                     times.append(end_time - start_time)
 
@@ -147,22 +146,30 @@ def multiply_partitioned_matrices_padded(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Multiply partitioned sparse and dense tensors with padding."
+        description="Multiply sharded sparse and dense tensors with padding."
     )
     parser.add_argument(
-        "partition_row",
+        "pt_file",
         type=int,
-        help="Number of partitions for the first dimension of edge_index.",
+        help="Path to plexus processed .pt file containing the data"
     )
     parser.add_argument(
-        "partition_col_x",
+        "shard_row",
         type=int,
-        help="Number of partitions for the second dimension of edge_index and the first dimension of x.",
+        default=1,
+        help="Number of shards for the first dimension of edge_index.",
     )
     parser.add_argument(
-        "partition_x_col",
+        "shard_col",
         type=int,
-        help="Number of partitions for the second dimension of x.",
+        default=1,
+        help="Number of shards for the second dimension of edge_index and the first dimension of x.",
+    )
+    parser.add_argument(
+        "shard_x_col",
+        type=int,
+        default=1,
+        help="Number of shards for the second dimension of x.",
     )
     parser.add_argument(
         "--iterations",
@@ -176,10 +183,11 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    multiply_partitioned_matrices_padded(
-        args.partition_row,
-        args.partition_col_x,
-        args.partition_x_col,
+    multiply_sharded_matrices_padded(
+        args.pt_file,
+        args.shard_row,
+        args.shard_col,
+        args.shard_x_col,
         args.iterations,
-        args.warmup,
+        args.warmup
     )
