@@ -4,13 +4,13 @@
 
     The script offers several command-line arguments to customize the training process:
     -   `--download_path`: Specifies the path to the directory where the dataset is stored.
-    -   `--num_epochs` (optional): Determines the number of training epochs (default is 2).
+    -   `--num_epochs` (optional): Determines the number of training epochs (default is 10).
     -   `--seed` (optional): Allows setting a specific random seed for reproducible experiments.
     -   Other aspects like the number of GCN layers and the hidden dimension size can be modified by adjusting the model definition within the script or by altering the dataset loading within the `get_dataset` function.
 
     **Example Usage:**
     ```bash
-    python pyg_serial.py --download_path <path/to/dataset> --num_epochs 10
+    python pyg_serial.py --download_path <path/to/dataset>
     ```
 
 -   **spmm.py**: This script is designed to test the performance of Sparse Matrix-Matrix Multiplication (SpMM), a fundamental operation in GNN computations. It provides flexibility in configuring the SpMM operation to analyze performance under various conditions.
