@@ -13,17 +13,21 @@ To use Plexus, you'll need the following dependencies:
     source <your_env_name>/bin/activate
     ```
 
-* **CUDA 12.4:** If you'll be running Plexus on GPUs, you'll need CUDA 12.4. On systems where modules are used to manage software, you can load it with the following command (this is present in the run script under the examples directory for Perlmutter):
+* **CUDA 12.4:** For running Plexus on GPUs, you'll need CUDA 12.4. On systems where modules are used to manage software, you can load it with the following command (this is present in the run script under the examples directory for Perlmutter):
 
     ```bash
     module load cudatoolkit/12.4
     ```
+
+For AMD Systems like Frontier, the latest available version of ROCm can be loaded.
 
 * **NCCL:** The NVIDIA Collective Communications Library (NCCL) is required for multi-GPU communication.  On systems where modules are used (like Perlmutter), you can load it with:
 
     ```bash
     module load nccl
     ```
+
+For AMD systems like Frontier, this can be substituted with RCCL.
 
 * **Python Dependencies:** Once your virtual environment is set up, you can install the required Python packages using `pip` and the `requirements.txt` file provided in the repository:
 

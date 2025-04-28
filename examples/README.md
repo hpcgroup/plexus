@@ -5,11 +5,11 @@ This script has various command-line arguments, including:
 
   * `--seed` (optional): Sets the random seed for all GPUs. If not provided, the default seed of 0 is used.
 
-  * `--G_intra_r`: Specifies the X dimension of the 3D parallelism configuration (default: 1).
+  * `--G_intra_r` (optional): Specifies the X dimension of the 3D parallelism configuration (default: 1).
 
-  * `--G_intra_c`: Specifies the Y dimension of the 3D parallelism configuration (default: 1).
+  * `--G_intra_c` (optional): Specifies the Y dimension of the 3D parallelism configuration (default: 1).
 
-  * `--G_intra_d`: Specifies the Z dimension of the 3D parallelism configuration (default: 1).
+  * `--G_intra_d` (optional): Specifies the Z dimension of the 3D parallelism configuration (default: 1).
 
   * `--gpus_per_node`: Specifies the number of GPUs available on each node.
 
