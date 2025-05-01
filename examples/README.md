@@ -19,6 +19,10 @@ This script has various command-line arguments, including:
 
   * `--overlap_aggregation` (optional): If set (`--overlap_aggregation`), enables overlapping of SpMM and all-reduce in the aggregation (default: False). This can only be applied if block_aggregation is.
 
+  * `--timing_start_epoch` (optional): What epoch to start timing at (default is 0)
+
+  * `--timing_end_epoch` (optional): What epoch to end timing at (inclusive, default is last epoch)
+
   * `--seed` (optional): Sets the random seed for all GPUs. If not provided, the default seed of 0 is used.
 
 -   **run_4.sh**: This is an example shell script for Perlmutter, demonstrating how to run a Plexus-parallelized GNN on 4 GPUs.  It includes placeholders that should be replaced with appropriate values for specific experiments, such as dataset path, output directory, etc. The script can be adapted to run on different numbers of GPUs and with different datasets.

@@ -35,6 +35,8 @@ def create_parser():
         default=False,
         help="Enable overlap in aggregation",
     )
+    parser.add_argument("--timing_start_epoch", type=int, default=None)
+    parser.add_argument("--timing_end_epoch", type=int, default=None)
     parser.add_argument("--seed", type=int, default=0)
     return parser
 
@@ -132,9 +134,13 @@ if __name__ == "__main__":
     # training loop
     for i in range(args.num_epochs):
         # range of epochs to time (inclusive of both endpoints)
-        timing_start_epoch, timing_end_epoch = 1, 9
+        if args.timing_start_epoch is None:
+            args.timing_start_epoch = 0
 
-        if i >= timing_start_epoch and i <= timing_end_epoch:
+        if args.timing_end_epoch is None:
+            args.timing_end_epoch = args.num_epochs - 1
+
+        if i >= args.timing_start_epoch and i <= args.timing_epoch:
             ax.get_timers().start("epoch " + str(i))
 
         loss = train(
@@ -147,10 +153,10 @@ if __name__ == "__main__":
             num_classes,
         )
 
-        if i >= timing_start_epoch and i <= timing_end_epoch:
+        if i >= args.timing_start_epoch and i <= args.timing_end_epoch:
             ax.get_timers().stop("epoch " + str(i))
 
-        if i == timing_end_epoch:
+        if i == args.timing_end_epoch:
             print_axonn_timer_data(ax.get_timers().get_times()[0])
 
         log = "Epoch: {:03d}, Train Loss: {:.4f}"
