@@ -6,8 +6,8 @@
 import torch
 import argparse
 from gcn_conv import GCNConv
-from axonn import axonn as ax
 import torch.nn.functional as F
+from plexus import plexus as plx
 import torch.distributed as dist
 from utils.dataloader import DataLoader
 from cross_entropy import parallel_cross_entropy
@@ -17,19 +17,25 @@ from utils.general import set_seed, print_axonn_timer_data
 # arguments
 def create_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--data_dir", type=str)
     parser.add_argument("--G_intra_r", type=int, default=1)
     parser.add_argument("--G_intra_c", type=int, default=1)
     parser.add_argument("--G_intra_d", type=int, default=1)
-    parser.add_argument("--gpus_per_node", type=int)
-    parser.add_argument("--data_dir", type=str)
+    parser.add_argument("--gpus_per_node", type=int, default=None)
     parser.add_argument("--num_epochs", type=int, default=2)
     parser.add_argument(
-        "--overlap",
+        "--block_aggregation",
         action="store_true",
         default=False,
-        help="Enable overlap of aggregation",
+        help="Enable 1D blocking in aggregation",
     )
+    parser.add_argument(
+        "--overlap_aggregation",
+        action="store_true",
+        default=False,
+        help="Enable overlap in aggregation",
+    )
+    parser.add_argument("--seed", type=int, default=0)
     return parser
 
 
@@ -38,13 +44,13 @@ class Net(torch.nn.Module):
     Define the GCN here
     """
 
-    def __init__(self, input_size, hidden_size, output_size, overlap):
+    def __init__(self, input_size, hidden_size, output_size):
         super(Net, self).__init__()
 
         self.num_gcn_layers = 3
-        self.conv1 = GCNConv(input_size, hidden_size, 0, overlap)
-        self.conv2 = GCNConv(hidden_size, hidden_size, 1, overlap)
-        self.conv3 = GCNConv(hidden_size, output_size, 2, overlap)
+        self.conv1 = GCNConv(input_size, hidden_size, 0)
+        self.conv2 = GCNConv(hidden_size, hidden_size, 1)
+        self.conv3 = GCNConv(hidden_size, output_size, 2)
 
     def forward(self, x, edge_index_shards):
         x = self.conv1(x, edge_index_shards)
@@ -95,12 +101,14 @@ if __name__ == "__main__":
 
     # initialize distributed environment
     dist.init_process_group(backend="nccl")
-    ax.init(
+    plx.init(
         G_intra_r=args.G_intra_r,
         G_intra_c=args.G_intra_c,
         G_intra_d=args.G_intra_d,
         gpus_per_node=args.gpus_per_node,
         enable_internal_timers=True,
+        block_aggregation=args.block_aggregation,
+        overlap_aggregation=args.overlap_aggregation,
     )
 
     # initialize parallel data loader
@@ -112,7 +120,7 @@ if __name__ == "__main__":
     )
 
     # create the model and move to gpu
-    model = Net(num_features, 128, num_classes, args.overlap).to(torch.device("cuda"))
+    model = Net(num_features, 128, num_classes).to(torch.device("cuda"))
 
     # create optimizer for parameters
     optimizer = torch.optim.AdamW(
