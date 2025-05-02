@@ -37,6 +37,10 @@ def create_parser():
     )
     parser.add_argument("--timing_start_epoch", type=int, default=None)
     parser.add_argument("--timing_end_epoch", type=int, default=None)
+    parser.add_argument("--lr", type=float, default=3e-3)
+    parser.add_argument("--weight_decay", type=float, default=0.0)
+    parser.add_argument("--num_gcn_layers", type=int, default=3)
+    parser.add_argument("--hidden_size", type=int, default=128)
     parser.add_argument("--seed", type=int, default=0)
     return parser
 
@@ -46,20 +50,25 @@ class Net(torch.nn.Module):
     Define the GCN here
     """
 
-    def __init__(self, input_size, hidden_size, output_size):
+    def __init__(self, num_gcn_layers, input_size, hidden_size, output_size):
         super(Net, self).__init__()
 
-        self.num_gcn_layers = 3
-        self.conv1 = GCNConv(input_size, hidden_size, 0)
-        self.conv2 = GCNConv(hidden_size, hidden_size, 1)
-        self.conv3 = GCNConv(hidden_size, output_size, 2)
+        self.num_gcn_layers = num_gcn_layers
+
+        self.layers = []
+        for i in range(self.num_gcn_layers):
+            if i == 0:
+                self.layers.append(GCNConv(input_size, hidden_size, i))
+            elif i == self.num_gcn_layers - 1:
+                self.layers.append(GCNConv(hidden_size, output_size, i))
+            else:
+                self.layers.append(GCNConv(hidden_size, hidden_size, i))
 
     def forward(self, x, edge_index_shards):
-        x = self.conv1(x, edge_index_shards)
-        x = F.relu(x)
-        x = self.conv2(x, edge_index_shards)
-        x = F.relu(x)
-        x = self.conv3(x, edge_index_shards)
+        for i in range(self.num_gcn_layers):
+            x = self.layers[i](x, edge_index_shards)
+            if i != self.num_gcn_layers - 1:
+                x = F.relu(x)
         return x
 
 
@@ -82,7 +91,7 @@ def train(
     # forward pass
     output = model(features_local, adj_shards)
 
-    # trains on entire graph, doesn't use a data.train_mask
+    # trains on entire graph, data.train_mask not used
     loss = parallel_cross_entropy(
         output, labels, model.num_gcn_layers, num_nodes, num_classes
     )
@@ -114,7 +123,7 @@ if __name__ == "__main__":
     )
 
     # initialize parallel data loader
-    data_loader = DataLoader(args.data_dir, 3)
+    data_loader = DataLoader(args.data_dir, args.num_gcn_layers)
 
     # get the dataset which includes graph, features, and output labels
     adj_shards, features, labels, num_nodes, num_features, num_classes = (
@@ -122,11 +131,15 @@ if __name__ == "__main__":
     )
 
     # create the model and move to gpu
-    model = Net(num_features, 128, num_classes).to(torch.device("cuda"))
+    model = Net(args.num_gcn_layers, num_features, args.hidden_size, num_classes).to(
+        torch.device("cuda")
+    )
 
     # create optimizer for parameters
     optimizer = torch.optim.AdamW(
-        list(model.parameters()) + [features], lr=3e-3, weight_decay=0
+        list(model.parameters()) + [features],
+        lr=args.lr,
+        weight_decay=args.weight_decay,
     )
 
     dist.barrier(device_ids=[torch.cuda.current_device()])

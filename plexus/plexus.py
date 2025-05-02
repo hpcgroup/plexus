@@ -8,7 +8,7 @@ def init(
     G_intra_d: int = 1,
     gpus_per_node: Optional[int] = None,
     enable_internal_timers: bool = False,
-    block_aggregation: bool = True,
+    block_aggregation: bool = False,
     overlap_aggregation: bool = False,
 ) -> None:
     """

@@ -10,9 +10,9 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 from plexus import plexus as plx
 import torch.distributed as dist
+from utils.general import pad_dimension, get_process_groups_info
 from axonn.intra_layer.communication import _gather, _all_reduce, _reduce_scatter
 from axonn.intra_layer.fully_connected import extract_local_params_from_full_params
-from utils.general import analyze_csr_tensor, pad_dimension, get_process_groups_info
 
 
 def extract_csr_submatrix(csr_matrix, start_row, end_row):

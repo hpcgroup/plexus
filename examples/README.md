@@ -23,6 +23,14 @@ This script has various command-line arguments, including:
 
   * `--timing_end_epoch` (optional): What epoch to end timing at (inclusive, default is last epoch)
 
+  * `--lr` (optional): Learning rate (default is 3e-3)
+
+  * `--weight_decay` (optional): Weight decay (default is 0.0)
+
+  * `--num_gcn_layers` (optional): Number of GCN layers (default is 3)
+
+  * `--hidden_size` (optional): Size of hidden dimension(s) (default is 128)
+
   * `--seed` (optional): Sets the random seed for all GPUs. If not provided, the default seed of 0 is used.
 
 -   **run_4.sh**: This is an example shell script for Perlmutter, demonstrating how to run a Plexus-parallelized GNN on 4 GPUs.  It includes placeholders that should be replaced with appropriate values for specific experiments, such as dataset path, output directory, etc. The script can be adapted to run on different numbers of GPUs and with different datasets.
