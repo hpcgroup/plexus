@@ -81,7 +81,7 @@ def chunked_spmm_all_reduce(csr_matrix, H, ar_group):
         chunk_edge_index = extract_csr_submatrix(csr_matrix, start_row, end_row)
 
         # spmm for current chunk
-        
+
         if not plx.overlap_agg:
             ax.get_timers.start("AGG = A * H")
 
