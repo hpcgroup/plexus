@@ -15,7 +15,7 @@ This script has various command-line arguments, including:
 
   * `--num_epochs` (optional): Determines the number of training epochs (default: 2).
 
-  * `--block_aggregation` (optional): If set (`--block_aggregation`), performs aggregation (both the SpMM and all-reduce) on 1D row blocks instead of the full adjacency matrix, which can help to reduce variability in some cases..
+  * `--block_aggregation` (optional): If set (`--block_aggregation`), performs aggregation (both the SpMM and all-reduce) on 1D row blocks instead of the full adjacency matrix, which can help to reduce variability in some cases.
 
   * `--overlap_aggregation` (optional): If set (`--overlap_aggregation`), enables overlapping of SpMM and all-reduce in the aggregation (default: False). This can only be applied if block_aggregation is.
 
