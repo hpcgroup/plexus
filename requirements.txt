@@ -1,5 +1,5 @@
-axonn
 numpy
-ogb
 torch
 torch_geometric
+ogb
+axonn
