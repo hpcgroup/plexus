@@ -21,13 +21,16 @@ To use Plexus, you'll need the following dependencies:
 
 For AMD Systems like Frontier, the latest available version of ROCm can be loaded.
 
-* **NCCL:** The NVIDIA Collective Communications Library (NCCL) is required for multi-GPU communication.  On systems where modules are used (like Perlmutter), you can load it with:
+* **NCCL/RCCL:** When PyTorch is installed (in Python Dependencies), it will be built with its own internal NCCL/RCCL.
 
-    ```bash
-    module load nccl
-    ```
+* **AWS OFI NCCL/RCCL:** This is a plugin that allows NCCL/RCCL to use libfabric as a network provider and improve performance.
+These are available at the following links - [AWS-OFI-NCCL](https://github.com/aws/aws-ofi-nccl), [AWS-OFI-RCCL](https://github.com/ROCm/aws-ofi-rccl).
 
-For AMD systems like Frontier, this can be substituted with RCCL.
+Instructions for Frontier can be found here - [Frontier AWS-OFI-RCCL Plugin](https://docs.olcf.ornl.gov/software/analytics/pytorch_frontier.html#aws-ofi-rccl-plugin)
+On Systems like Perlmutter, the plugin can be loaded with the following module:
+```bash
+module load nccl
+```
 
 * **Python Dependencies:** Once your virtual environment is set up, you can install the required Python packages using `pip` and the `requirements.txt` file provided in the repository:
 
