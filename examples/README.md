@@ -19,6 +19,8 @@ This script has various command-line arguments, including:
 
   * `--overlap_aggregation` (optional): If set (`--overlap_aggregation`), enables overlapping of SpMM and all-reduce in the aggregation (default: False). This can only be applied if block_aggregation is.
 
+  * `--tune_gemms` (optional): If set (`--tune_gemms`), enables tuning of dense matrix multiplications to improve performance (default: False).
+
   * `--timing_start_epoch` (optional): What epoch to start timing at (default is 0)
 
   * `--timing_end_epoch` (optional): What epoch to end timing at (inclusive, default is last epoch)
