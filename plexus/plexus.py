@@ -40,8 +40,8 @@ def init(
         enable_internal_timers,
     )
 
-    global block_agg, overlap_agg, tune_dense_mm
-    block_agg, overlap_agg, tune_dense_mm = (
+    global block_agg, overlap_agg, tune_gemm
+    block_agg, overlap_agg, tune_gemm = (
         block_aggregation,
         overlap_aggregation,
         tune_gemms,

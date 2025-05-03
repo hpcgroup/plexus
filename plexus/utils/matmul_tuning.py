@@ -81,7 +81,7 @@ def tuned_matmul(A, B, matmul_name):
     the result of the matrix multiplication
     """
 
-    if not plx.tune_dense_mm:
+    if not plx.tune_gemm:
         return torch.mm(A, B)
 
     if matmul_name in matmul_to_index:
