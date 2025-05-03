@@ -35,6 +35,12 @@ def create_parser():
         default=False,
         help="Enable overlap in aggregation",
     )
+    parser.add_argument(
+        "--tune_gemms",
+        action="store_true",
+        default=False,
+        help="Enables tuning of dense matrix multiplications",
+    )
     parser.add_argument("--timing_start_epoch", type=int, default=None)
     parser.add_argument("--timing_end_epoch", type=int, default=None)
     parser.add_argument("--lr", type=float, default=3e-3)
@@ -120,6 +126,7 @@ if __name__ == "__main__":
         enable_internal_timers=True,
         block_aggregation=args.block_aggregation,
         overlap_aggregation=args.overlap_aggregation,
+        tune_gemms=args.tune_gemms,
     )
 
     # initialize parallel data loader

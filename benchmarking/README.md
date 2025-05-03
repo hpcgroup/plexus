@@ -20,8 +20,8 @@
     -   `--shard_row` (optional): Optionally specifies how to shard the row dimension (M) of the sparse matrix (A, sized M x K). This allows for investigating the impact of different row sharding strategies on SpMM performance (default is 1).
     -   `--shard_col` (optional): Optionally specifies how to shard the column dimension (K) of the sparse matrix (A, sized M x K), which corresponds to the row dimension of the dense features matrix (F, sized K x N). This allows for investigating the impact of different sharding strategies along the shared dimension on SpMM performance (default is 1).
     -   `--shard_col_x` (optional): Optionally specifies how to shard the column dimension (N) of the dense feature matrix (F, sized K x N). This allows for investigating the impact of different column sharding strategies on SpMM performance (default is 1).
-    -   `--iterations` (optional): Sets the total number of SpMM iterations to run for the benchmark (default is 25). 
-    -   `--warmup` (optional): Specifies the number of initial iterations to perform as a warmup. The timing results of these warmup iterations will be ignored to get more stable performance measurements (default is 5)).
+    -   `--iterations` (optional): Sets the number of SpMM iterations to run and time for the benchmark (default is 20). 
+    -   `--warmup` (optional): Specifies the number of iterations to perform as a warmup. The timing results of these warmup iterations will be ignored to get more stable performance measurements (default is 5).
     - Note that for the arguments related to sharding the matrices, the matrices are padded so their sizes are divisible by these arguments.
 
     **Example Usage:**

@@ -10,6 +10,7 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 from plexus import plexus as plx
 import torch.distributed as dist
+from utils.matmul_tuning import tuned_matmul
 from utils.general import pad_dimension, get_process_groups_info
 from axonn.intra_layer.communication import _gather, _all_reduce, _reduce_scatter
 from axonn.intra_layer.fully_connected import extract_local_params_from_full_params
@@ -195,7 +196,7 @@ class GCNConvFunction(torch.autograd.Function):
 
         # combination - (A * H) * W
         ax.get_timers().start("OUT = AGG * W")
-        OUT = torch.mm(AGG, W)
+        OUT = tuned_matmul(AGG, W, "AGG * W")
         ax.get_timers().stop("OUT = AGG * W")
 
         # all reduce output of layer
@@ -221,7 +222,7 @@ class GCNConvFunction(torch.autograd.Function):
         # calculate gradient with respect to weight (AGG.T * GRAD_OUTPUT)
         # and reduce scatter it so they're sharded
         ax.get_timers().start("GRAD_W = AGG.T * GRAD_OUT")
-        grad_weight = torch.mm(torch.t(agg), grad_output)
+        grad_weight = tuned_matmul(torch.t(agg), grad_output, "AGG.T * GRAD_OUT")
         ax.get_timers().stop("GRAD_W = AGG.T * GRAD_OUT")
 
         if ctx.bwd_reduce_scatter_grad_weights:
@@ -236,7 +237,7 @@ class GCNConvFunction(torch.autograd.Function):
 
         # calculate gradient with respect to AGG and all-reduce
         ax.get_timers().start("GRAD_AGG = GRAD_OUT * W.T")
-        grad_agg = torch.mm(grad_output, torch.t(weight))
+        grad_agg = tuned_matmul(grad_output, torch.t(weight), "GRAD_OUT * W.T")
         ax.get_timers().stop("GRAD_AGG = GRAD_OUT * W.T")
 
         _all_reduce(grad_agg, ctx.backward_all_reduce_group)

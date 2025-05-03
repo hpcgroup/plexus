@@ -10,6 +10,7 @@ def init(
     enable_internal_timers: bool = False,
     block_aggregation: bool = False,
     overlap_aggregation: bool = False,
+    tune_gemms: bool = False,
 ) -> None:
     """
     Initialize Plexus' 3D parallelism
@@ -24,6 +25,7 @@ def init(
         and matrix multiplications.
         block_aggregation (bool): 1D block the aggregation
         overlap_aggregation (bool): enable overlap in the aggregation
+        tune_gemms (bool): enable tuning of dense matrix multiplications
     """
 
     # overlap_aggregation can only be used with block_aggregation
@@ -38,5 +40,9 @@ def init(
         enable_internal_timers,
     )
 
-    global block_agg, overlap_agg
-    block_agg, overlap_agg = block_aggregation, overlap_aggregation
+    global block_agg, overlap_agg, tune_dense_mm
+    block_agg, overlap_agg, tune_dense_mm = (
+        block_aggregation,
+        overlap_aggregation,
+        tune_gemms,
+    )
