@@ -15,7 +15,7 @@ def process_log_file(filename, warmup):
     """
     Args:
         filename - path to file to parse
-        warmup - number of epochs to ignore in the calculation
+        warmup - number of initial epochs to ignore in the calculation
 
     Returns:
         tuple containing the epoch time and communication time, averaged across non-warmup epochs

@@ -8,10 +8,12 @@ import torch
 from axonn import axonn as ax
 from torch.nn import Parameter
 import torch.nn.functional as F
+from plexus import plexus as plx
 import torch.distributed as dist
+from utils.matmul_tuning import tuned_matmul
+from utils.general import pad_dimension, get_process_groups_info
 from axonn.intra_layer.communication import _gather, _all_reduce, _reduce_scatter
 from axonn.intra_layer.fully_connected import extract_local_params_from_full_params
-from utils.general import analyze_csr_tensor, pad_dimension, get_process_groups_info
 
 
 def extract_csr_submatrix(csr_matrix, start_row, end_row):
@@ -53,15 +55,15 @@ def extract_csr_submatrix(csr_matrix, start_row, end_row):
     return sub_csr
 
 
-def chunked_spmm_all_reduce(csr_matrix, H, ar_group, overlap=False):
+def chunked_spmm_all_reduce(csr_matrix, H, ar_group):
     """
     Performs SpMM of a CSR matrix with a dense matrix H,
     followed by an all-reduce operation on the result, optionally
     overlapping the all-reduce of the current chunk with the SpMM of the next.
     """
 
-    timer_name = "AGG = A * H and All-Reduce AGG"
-    ax.get_timers().start(timer_name)
+    if plx.overlap_agg:
+        ax.get_timers().start("AGG = A * H and All-Reduce AGG")
 
     # calculate number of rows per chunk
     num_rows = csr_matrix.size(0)
@@ -80,9 +82,16 @@ def chunked_spmm_all_reduce(csr_matrix, H, ar_group, overlap=False):
         chunk_edge_index = extract_csr_submatrix(csr_matrix, start_row, end_row)
 
         # spmm for current chunk
+
+        if not plx.overlap_agg:
+            ax.get_timers.start("AGG = A * H")
+
         results[i] = torch.sparse.mm(chunk_edge_index, H)
 
-        if overlap:
+        if not plx.overlap_agg:
+            ax.get_timers().stop("AGG = A * H")
+
+        if plx.overlap_agg:
             # once previous chunk is complete, launch async all-reduce
             # which should allow for overlap with the next chunk's spmm
             async_handles[i] = (
@@ -94,7 +103,7 @@ def chunked_spmm_all_reduce(csr_matrix, H, ar_group, overlap=False):
             # Perform all-reduce on the chunk result
             _all_reduce(results[i], ar_group)
 
-    if overlap:
+    if plx.overlap_agg:
         # Wait for all asynchronous all-reduce operations to complete.
         if dist.is_initialized():
             for handle in async_handles:
@@ -103,7 +112,10 @@ def chunked_spmm_all_reduce(csr_matrix, H, ar_group, overlap=False):
 
     # concatenate all results to form the final output
     AGG = torch.cat(results, dim=0)
-    ax.get_timers().stop(timer_name)
+
+    if plx.overlap_agg:
+        ax.get_timers().stop("AGG = A * H and All-Reduce AGG")
+
     return AGG
 
 
@@ -126,7 +138,6 @@ class GCNConvFunction(torch.autograd.Function):
         combination_all_reduce_group,
         gather_features,
         gather_weights,
-        overlap,
     ):
         """
         Forward pass of GCN layer
@@ -143,7 +154,6 @@ class GCNConvFunction(torch.autograd.Function):
             combination_all_reduce_group: process group along which output of layer is all-reduced
             gather_features: flag indicating whether x is sharded across depth group or not
             gather_weights: flag indicating whether weight is sharded across depth group or not
-            overlap: flag indicating whether aggergation spmm and all-reduce are overlapped or not
 
         Returns:
             output matrix of current GCN layer
@@ -159,9 +169,15 @@ class GCNConvFunction(torch.autograd.Function):
             H = x
 
         # compute aggregation (A * H) and all-reduce the result
-        AGG = chunked_spmm_all_reduce(
-            edge_index, H, aggregation_all_reduce_group, overlap
-        )
+
+        if plx.block_agg:
+            AGG = chunked_spmm_all_reduce(edge_index, H, aggregation_all_reduce_group)
+        else:
+            ax.get_timers.start("AGG = A * H")
+            AGG = torch.sparse.mm(edge_index, H)
+            ax.get_timers.stop("AGG = A * H")
+
+            _all_reduce(AGG, aggregation_all_reduce_group)
 
         # save AGG = A*H, weight, and adj matrix for backward pass
         ctx.save_for_backward(AGG, weight, edge_index_t)
@@ -180,7 +196,7 @@ class GCNConvFunction(torch.autograd.Function):
 
         # combination - (A * H) * W
         ax.get_timers().start("OUT = AGG * W")
-        OUT = torch.mm(AGG, W)
+        OUT = tuned_matmul(AGG, W, "AGG * W")
         ax.get_timers().stop("OUT = AGG * W")
 
         # all reduce output of layer
@@ -206,7 +222,7 @@ class GCNConvFunction(torch.autograd.Function):
         # calculate gradient with respect to weight (AGG.T * GRAD_OUTPUT)
         # and reduce scatter it so they're sharded
         ax.get_timers().start("GRAD_W = AGG.T * GRAD_OUT")
-        grad_weight = torch.mm(torch.t(agg), grad_output)
+        grad_weight = tuned_matmul(torch.t(agg), grad_output, "AGG.T * GRAD_OUT")
         ax.get_timers().stop("GRAD_W = AGG.T * GRAD_OUT")
 
         if ctx.bwd_reduce_scatter_grad_weights:
@@ -221,7 +237,7 @@ class GCNConvFunction(torch.autograd.Function):
 
         # calculate gradient with respect to AGG and all-reduce
         ax.get_timers().start("GRAD_AGG = GRAD_OUT * W.T")
-        grad_agg = torch.mm(grad_output, torch.t(weight))
+        grad_agg = tuned_matmul(grad_output, torch.t(weight), "GRAD_OUT * W.T")
         ax.get_timers().stop("GRAD_AGG = GRAD_OUT * W.T")
 
         _all_reduce(grad_agg, ctx.backward_all_reduce_group)
@@ -266,11 +282,10 @@ class GCNConv(torch.nn.Module):
     3D Parallel GCNConv Layer
     """
 
-    def __init__(self, in_channels, out_channels, layer_num, overlap, **kwargs):
+    def __init__(self, in_channels, out_channels, layer_num, **kwargs):
         super(GCNConv, self).__init__()
 
         self.layer_num = layer_num
-        self.overlap = overlap
 
         # groups is the three process groups in a tuple (outer, inner, depth)
         # H matrix divided by outer and inner, depth is for sharding
@@ -363,5 +378,4 @@ class GCNConv(torch.nn.Module):
             self.inner_group,
             self.gather_features,
             self.gather_weights,
-            self.overlap,
         )
