@@ -1,5 +1,4 @@
 *.png
-*.npy
 *.out
 *.txt
 *__pycache__
