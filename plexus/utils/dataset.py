@@ -53,7 +53,6 @@ def preprocess_graph(
     """
 
     # retrieve the unprocessed dataset and normalize the input features
-    unsupervised, directed = False, False
     if name == "reddit":
         dataset = Reddit(root=input_dir, transform=T.NormalizeFeatures())
     elif name == "products":

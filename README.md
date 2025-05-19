@@ -46,3 +46,6 @@ These are available at the following links - [AWS-OFI-NCCL](https://github.com/a
 * **performance**: Houses files dedicated to modeling the performance characteristics of parallel GNN training. This includes models for communication overhead, computation costs (specifically SpMM), and memory utilization.
 * **plexus**: Contains the core logic of the Plexus framework. This includes the parallel implementation of a Graph Convolutional Network (GCN) layer, along with utility functions for dataset preprocessing, efficient data loading, and other essential components for distributed GNN training.
 
+## PYTHONPATH
+
+* Once you have cloned the repo and have all dependencies installed, you should also append the path to your clone of the Plexus repo to the PYTHONPATH environment variable.
