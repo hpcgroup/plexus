@@ -25,8 +25,10 @@ def preprocess_graph(
     input_dir: str,
     output_dir: str,
     double_perm: Optional[bool] = True,
+    unsupervised: Optional[bool] = False,
     num_features: Optional[int] = 128,
     num_classes: Optional[int] = 32,
+    directed: Optional[bool] = False,
 ):
     """
     Function to take the raw graph data and preprocess it
@@ -36,9 +38,10 @@ def preprocess_graph(
         input_dir: directory where original data is stored
         output_dir: directory where processed data should be saved
         double_perm: whether double permutation optimization should be applied or not
+        unsupervised: can specify if features/classes should be generated for the dataset
         num_features: can optionally specify number of input features for graphs without features data
         num_classes: can optionally specify number of classes for unlabeled data
-
+        directed: specifies if graph is directed and uses transpose of adjacency matrix if so for incoming message aggregation
     Returns:
         saves the preprocessed data to output_dir as a .pt file
     """
@@ -284,6 +287,28 @@ def mtx_to_pyg(mtx_file, output_file):
     # Save the processed graph to a .pt file
     torch.save(data, output_file)
     print(f"Saved processed graph to {output_file}")
+
+
+def tsv_to_pyg(tsv_file, output_file, N):
+    """
+    Reads a TSV file representing a graph, converts it to a PyTorch Geometric Data object,
+    and saves it to a file.
+    """
+
+    edge_list = []
+    values = []
+
+    with open(tsv_file, "r") as f:
+        for line in f:
+            parts = line.strip().split("\t")
+            edge_list.append([int(parts[0]), int(parts[1])])
+            values.append(float(parts[2]))
+
+    edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+    edge_attr = torch.tensor(values, dtype=torch.float)
+    data = Data(edge_index=edge_index, edge_attr=edge_attr, num_nodes=N)
+
+    torch.save(data, output_file)
 
 
 def print_nnz_stats(file_path: str, num_partitions: int):

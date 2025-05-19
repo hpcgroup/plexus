@@ -29,6 +29,7 @@ def comp_model(N, NNZ, G, D_list, coef=[1, 1, 1]):
     Args:
         N - number of nodes in graph
         NNZ - number of nonzeros in graph's adjacency matrix
+        G - number of GPUs
         D_list - list of features at each layer excluding number of classes (ex: 3 GCN layers with 128 hidden dim, 100 feature size, [100, 128, 128])
         coef - coefficients to multiply the three terms of the model by to get times in ms (default coefficients don't result in meaningful times, but give an ordering of the configs
 
