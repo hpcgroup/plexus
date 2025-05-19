@@ -29,8 +29,9 @@ def time_gpu(op, warmup=5, trials=20):
 # matmul wrapper function that takes in the layout change flags and transpose order
 def matmul(A, B, change_layout, transpose=False):
     if transpose:
-        A = A.t()
-        B = B.t()
+        temp_A = A
+        A = B.t()
+        B = temp_A.t()
 
     if change_layout[0]:
         A = A.t().contiguous().t()
@@ -51,7 +52,16 @@ def matmul(A, B, change_layout, transpose=False):
 
 
 # configurations to test when tuning the matrix multiplication
-transpose_orders = [False, False, False, False, True, True, True, True]
+transpose_orders = [
+    False,
+    False,
+    False,
+    False,
+    True,
+    True,
+    True,
+    True,
+]
 change_layouts = [
     (False, False),
     (True, False),
@@ -86,7 +96,12 @@ def tuned_matmul(A, B, matmul_name):
 
     if matmul_name in matmul_to_index:
         best_index = matmul_to_index[matmul_name]
-        return matmul(A, B, change_layouts[best_index], transpose_orders[best_index])
+        return matmul(
+            A,
+            B,
+            change_layouts[best_index],
+            transpose_orders[best_index],
+        )
 
     # minimum time taken and index of the best mode
     min_time, min_idx = None, None

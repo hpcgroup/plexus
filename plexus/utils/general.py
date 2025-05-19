@@ -94,7 +94,12 @@ class Node:
     def __init__(self, value):
         self.value = value
         self.children = []
-        self.level_color_map = [color.PURPLE, color.GREEN, color.CYAN, color.RED]
+        self.level_color_map = [
+            color.PURPLE,
+            color.GREEN,
+            color.CYAN,
+            color.RED,
+        ]
 
     def add_children(self, child):
         self.children.append(child)

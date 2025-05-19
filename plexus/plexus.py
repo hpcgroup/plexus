@@ -33,11 +33,11 @@ def init(
 
     # use AxoNN for process group creation and timers
     ax.init(
-        G_intra_r,
-        G_intra_c,
-        G_intra_d,
-        gpus_per_node,
-        enable_internal_timers,
+        G_intra_r=G_intra_r,
+        G_intra_c=G_intra_c,
+        G_intra_d=G_intra_d,
+        gpus_per_node=gpus_per_node,
+        enable_internal_timers=enable_internal_timers,
     )
 
     global block_agg, overlap_agg, tune_gemm

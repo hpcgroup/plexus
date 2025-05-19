@@ -10,10 +10,16 @@ from torch.nn import Parameter
 import torch.nn.functional as F
 from plexus import plexus as plx
 import torch.distributed as dist
-from utils.matmul_tuning import tuned_matmul
-from utils.general import pad_dimension, get_process_groups_info
-from axonn.intra_layer.communication import _gather, _all_reduce, _reduce_scatter
-from axonn.intra_layer.fully_connected import extract_local_params_from_full_params
+from plexus.utils.matmul_tuning import tuned_matmul
+from plexus.utils.general import pad_dimension, get_process_groups_info
+from axonn.intra_layer.communication import (
+    _gather,
+    _all_reduce,
+    _reduce_scatter,
+)
+from axonn.intra_layer.fully_connected import (
+    extract_local_params_from_full_params,
+)
 
 
 def extract_csr_submatrix(csr_matrix, start_row, end_row):
@@ -37,7 +43,10 @@ def extract_csr_submatrix(csr_matrix, start_row, end_row):
     # Adjust row indices to be zero-based for the submatrix
     sub_crow_indices = crow_indices[start_row : end_row + 1] - start_ptr
     sub_crow_indices = torch.cat(
-        (torch.tensor([0], device=sub_crow_indices.device), sub_crow_indices[1:])
+        (
+            torch.tensor([0], device=sub_crow_indices.device),
+            sub_crow_indices[1:],
+        )
     )
 
     # Create new CSR tensor
@@ -138,6 +147,7 @@ class GCNConvFunction(torch.autograd.Function):
         combination_all_reduce_group,
         gather_features,
         gather_weights,
+        layer_num,
     ):
         """
         Forward pass of GCN layer
@@ -154,6 +164,7 @@ class GCNConvFunction(torch.autograd.Function):
             combination_all_reduce_group: process group along which output of layer is all-reduced
             gather_features: flag indicating whether x is sharded across depth group or not
             gather_weights: flag indicating whether weight is sharded across depth group or not
+            layer_num: indicates which layer it is
 
         Returns:
             output matrix of current GCN layer
@@ -186,6 +197,7 @@ class GCNConvFunction(torch.autograd.Function):
         ctx.local_weight_shape = local_weight_shape
         ctx.bwd_reduce_scatter_grad_x = gather_features
         ctx.bwd_reduce_scatter_grad_weights = gather_weights
+        ctx.layer_num = layer_num
 
         # gather weights - assuming that we always have this matrix sharded
         if gather_weights:
@@ -196,7 +208,7 @@ class GCNConvFunction(torch.autograd.Function):
 
         # combination - (A * H) * W
         ax.get_timers().start("OUT = AGG * W")
-        OUT = tuned_matmul(AGG, W, "AGG * W")
+        OUT = tuned_matmul(AGG, W, "AGG * W " + str(layer_num))
         ax.get_timers().stop("OUT = AGG * W")
 
         # all reduce output of layer
@@ -222,13 +234,17 @@ class GCNConvFunction(torch.autograd.Function):
         # calculate gradient with respect to weight (AGG.T * GRAD_OUTPUT)
         # and reduce scatter it so they're sharded
         ax.get_timers().start("GRAD_W = AGG.T * GRAD_OUT")
-        grad_weight = tuned_matmul(torch.t(agg), grad_output, "AGG.T * GRAD_OUT")
+        grad_weight = tuned_matmul(
+            torch.t(agg), grad_output, "AGG.T * GRAD_OUT " + str(ctx.layer_num)
+        )
         ax.get_timers().stop("GRAD_W = AGG.T * GRAD_OUT")
 
         if ctx.bwd_reduce_scatter_grad_weights:
             grad_weight = grad_weight.reshape(-1)
             grad_weight = _reduce_scatter(
-                grad_weight, dim=0, process_group=ctx.backward_depth_group
+                grad_weight,
+                dim=0,
+                process_group=ctx.backward_depth_group,
             )
         else:
             # all-reduce instead of reduce-scatter if weights aren't sharded
@@ -237,7 +253,9 @@ class GCNConvFunction(torch.autograd.Function):
 
         # calculate gradient with respect to AGG and all-reduce
         ax.get_timers().start("GRAD_AGG = GRAD_OUT * W.T")
-        grad_agg = tuned_matmul(grad_output, torch.t(weight), "GRAD_OUT * W.T")
+        grad_agg = tuned_matmul(
+            grad_output, torch.t(weight), "GRAD_OUT * W.T " + str(ctx.layer_num)
+        )
         ax.get_timers().stop("GRAD_AGG = GRAD_OUT * W.T")
 
         _all_reduce(grad_agg, ctx.backward_all_reduce_group)
@@ -266,6 +284,7 @@ class GCNConvFunction(torch.autograd.Function):
             None,
             None,
             grad_weight,
+            None,
             None,
             None,
             None,
@@ -325,7 +344,9 @@ class GCNConv(torch.nn.Module):
         # pad weight matrix dimensions
         if self.gather_weights:
             self.in_channels = pad_dimension(
-                in_channels, self.inner_group_size, self.depth_group_size
+                in_channels,
+                self.inner_group_size,
+                self.depth_group_size,
             )
         else:
             self.in_channels = pad_dimension(in_channels, self.inner_group_size)
@@ -335,7 +356,12 @@ class GCNConv(torch.nn.Module):
         # pad weights matrix
         full_weight = F.pad(
             full_weight,
-            (0, self.out_channels - out_channels, 0, self.in_channels - in_channels),
+            (
+                0,
+                self.out_channels - out_channels,
+                0,
+                self.in_channels - in_channels,
+            ),
         )
 
         self.local_in_channels = self.in_channels // self.inner_group_size
@@ -345,7 +371,10 @@ class GCNConv(torch.nn.Module):
         if self.gather_weights:
             self.weight = Parameter(
                 extract_local_params_from_full_params(
-                    full_weight, self.inner_group, self.outer_group, self.depth_group
+                    full_weight,
+                    self.inner_group,
+                    self.outer_group,
+                    self.depth_group,
                 ),
                 requires_grad=True,
             )
@@ -378,4 +407,5 @@ class GCNConv(torch.nn.Module):
             self.inner_group,
             self.gather_features,
             self.gather_weights,
+            self.layer_num,
         )

@@ -5,7 +5,7 @@ import torch
 from typing import Optional
 import torch.nn.functional as F
 from torch_geometric.data import Data
-from utils.general import pad_dimension, get_process_groups_info
+from plexus.utils.general import pad_dimension, get_process_groups_info
 
 
 class DataLoader:
@@ -116,13 +116,22 @@ class DataLoader:
         ) = ([], [], [], [])
         for i in range(min(3, self.num_gcn_layers)):
             if i == 0:
-                dim1_num_gpus, dim2_num_gpus = num_gpus[0], num_gpus[1]
+                dim1_num_gpus, dim2_num_gpus = (
+                    num_gpus[0],
+                    num_gpus[1],
+                )
                 rank1, rank2 = ranks[0], ranks[1]
             elif i == 1:
-                dim1_num_gpus, dim2_num_gpus = num_gpus[2], num_gpus[0]
+                dim1_num_gpus, dim2_num_gpus = (
+                    num_gpus[2],
+                    num_gpus[0],
+                )
                 rank1, rank2 = ranks[2], ranks[0]
             else:
-                dim1_num_gpus, dim2_num_gpus = num_gpus[1], num_gpus[2]
+                dim1_num_gpus, dim2_num_gpus = (
+                    num_gpus[1],
+                    num_gpus[2],
+                )
                 rank1, rank2 = ranks[1], ranks[2]
 
             dim1_step = pad_dimension(self.num_nodes, dim1_num_gpus) // dim1_num_gpus
@@ -173,13 +182,23 @@ class DataLoader:
             adj_num = 1
 
         for partition_idx_dim1 in range(
-            min(adj_dim1_start // partition_size, self.num_partitions_dim),
-            min(((adj_dim1_stop - 1) // partition_size) + 1, self.num_partitions_dim),
+            min(
+                adj_dim1_start // partition_size,
+                self.num_partitions_dim,
+            ),
+            min(
+                ((adj_dim1_stop - 1) // partition_size) + 1,
+                self.num_partitions_dim,
+            ),
         ):
             for partition_idx_dim2 in range(
-                min(adj_dim2_start // partition_size, self.num_partitions_dim),
                 min(
-                    ((adj_dim2_stop - 1) // partition_size) + 1, self.num_partitions_dim
+                    adj_dim2_start // partition_size,
+                    self.num_partitions_dim,
+                ),
+                min(
+                    ((adj_dim2_stop - 1) // partition_size) + 1,
+                    self.num_partitions_dim,
                 ),
             ):
                 curr_edge_index, curr_values = torch.load(
@@ -219,7 +238,10 @@ class DataLoader:
         merged_features = None
 
         for partition_idx_dim1 in range(
-            min(self.nodes_start // partition_size_dim1, self.num_partitions_dim),
+            min(
+                self.nodes_start // partition_size_dim1,
+                self.num_partitions_dim,
+            ),
             min(
                 ((self.nodes_stop - 1) // partition_size_dim1) + 1,
                 self.num_partitions_dim,
@@ -228,7 +250,8 @@ class DataLoader:
             curr_merged = None
             for partition_idx_dim2 in range(
                 min(
-                    self.features_start // partition_size_dim2, self.num_partitions_dim
+                    self.features_start // partition_size_dim2,
+                    self.num_partitions_dim,
                 ),
                 min(
                     ((self.features_stop - 1) // partition_size_dim2) + 1,
@@ -279,9 +302,13 @@ class DataLoader:
             labels_num = 1
 
         for partition_idx in range(
-            min(self.labels_start // partition_size, self.num_partitions_dim),
             min(
-                ((self.labels_stop - 1) // partition_size) + 1, self.num_partitions_dim
+                self.labels_start // partition_size,
+                self.num_partitions_dim,
+            ),
+            min(
+                ((self.labels_stop - 1) // partition_size) + 1,
+                self.num_partitions_dim,
             ),
         ):
             curr_partition = torch.load(
@@ -327,7 +354,10 @@ class DataLoader:
         adj_local = torch.sparse_coo_tensor(
             adj_indices,
             edge_weight[adj_mask],
-            (dim1_stop_idx - dim1_start_idx, dim2_stop_idx - dim2_start_idx),
+            (
+                dim1_stop_idx - dim1_start_idx,
+                dim2_stop_idx - dim2_start_idx,
+            ),
         )
 
         del edge_index
@@ -385,7 +415,8 @@ class DataLoader:
             self.features_stop - self.features_start
         ) - features_local.shape[1]
         features_local = F.pad(
-            features_local, (0, num_features_to_pad, 0, num_nodes_to_pad)
+            features_local,
+            (0, num_features_to_pad, 0, num_nodes_to_pad),
         )
 
         features_local = features_local.reshape(-1)[self.depth_start : self.depth_stop]
@@ -445,7 +476,8 @@ class DataLoader:
                 if len(pt_files) != 1:
                     raise ValueError("Expected exactly one .pt file in the directory.")
                 self.data, self.num_classes = torch.load(
-                    os.path.join(self.data_dir, pt_files[0]), weights_only=False
+                    os.path.join(self.data_dir, pt_files[0]),
+                    weights_only=False,
                 )
 
                 self.__set_graph_attributes()
@@ -455,13 +487,17 @@ class DataLoader:
                     if not self.double_perm or i % 2 == 0:
                         adj_shards.append(
                             self.__split_adj(
-                                self.data.edge_index, self.data.edge_weight, i
+                                self.data.edge_index,
+                                self.data.edge_weight,
+                                i,
                             )
                         )
                     else:
                         adj_shards.append(
                             self.__split_adj(
-                                self.data.edge_index_2, self.data.edge_weight, i
+                                self.data.edge_index_2,
+                                self.data.edge_weight,
+                                i,
                             )
                         )
             else:

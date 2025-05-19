@@ -45,7 +45,11 @@ def process_log_file(filename, warmup):
                 cross_time = 0
             elif comm_time is not None and any(
                 keyword in line
-                for keyword in ["gather ", "all-reduce ", "reduce-scatter "]
+                for keyword in [
+                    "gather ",
+                    "all-reduce ",
+                    "reduce-scatter ",
+                ]
             ):
                 comm_time += extract_avg_time(line)
             elif comp_time is not None and any(

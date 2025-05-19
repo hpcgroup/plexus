@@ -5,13 +5,14 @@
 
 import torch
 import argparse
-from gcn_conv import GCNConv
+from axonn import axonn as ax
 import torch.nn.functional as F
 from plexus import plexus as plx
 import torch.distributed as dist
-from utils.dataloader import DataLoader
-from cross_entropy import parallel_cross_entropy
-from utils.general import set_seed, print_axonn_timer_data
+from plexus.gcn_conv import GCNConv
+from plexus.utils.dataloader import DataLoader
+from plexus.cross_entropy import parallel_cross_entropy
+from plexus.utils.general import set_seed, print_axonn_timer_data
 
 
 # arguments
@@ -133,14 +134,22 @@ if __name__ == "__main__":
     data_loader = DataLoader(args.data_dir, args.num_gcn_layers)
 
     # get the dataset which includes graph, features, and output labels
-    adj_shards, features, labels, num_nodes, num_features, num_classes = (
-        data_loader.load()
-    )
+    (
+        adj_shards,
+        features,
+        labels,
+        num_nodes,
+        num_features,
+        num_classes,
+    ) = data_loader.load()
 
     # create the model and move to gpu
-    model = Net(args.num_gcn_layers, num_features, args.hidden_size, num_classes).to(
-        torch.device("cuda")
-    )
+    model = Net(
+        args.num_gcn_layers,
+        num_features,
+        args.hidden_size,
+        num_classes,
+    ).to(torch.device("cuda"))
 
     # create optimizer for parameters
     optimizer = torch.optim.AdamW(
@@ -160,7 +169,7 @@ if __name__ == "__main__":
         if args.timing_end_epoch is None:
             args.timing_end_epoch = args.num_epochs - 1
 
-        if i >= args.timing_start_epoch and i <= args.timing_epoch:
+        if i >= args.timing_start_epoch and i <= args.timing_end_epoch:
             ax.get_timers().start("epoch " + str(i))
 
         loss = train(
