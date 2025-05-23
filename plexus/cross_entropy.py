@@ -7,7 +7,7 @@ import torch
 from axonn import axonn as ax
 import torch.nn.functional as F
 import torch.distributed as dist
-from utils.general import get_process_groups_info
+from plexus.utils.general import get_process_groups_info
 
 
 class TensorParallelCrossEntropy(torch.autograd.Function):

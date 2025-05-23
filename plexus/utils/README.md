@@ -14,7 +14,7 @@
 
     -   **dataset.py**: This module provides utilities for preprocessing graph datasets. Key functions include:
         -   `preprocess_graph()`: Preprocesses a graph dataset.  This includes normalizing features and the adjacency matrix, and applying the double permutation scheme specific to Plexus.  It is recommended to use the `set_seed` function from `general.py` before calling this function, as random initialization is used for features in datasets that do not originally contain them.
-        -   `partition_graph_2d()`: Statically 2D partitions a preprocessed graph, creating an individual file for each 2D matrix partition. This allows for distributing the data across multiple devices, preventing each GPU from having to load the entire dataset.
+        -   `partition_graph_2d()`: Statically 2D partitions a preprocessed graph, creating an individual file for each 2D matrix partition. This allows for distributing the data across multiple devices, preventing each GPU from having to load the entire dataset. (If running OOM, try reducing the number of threads used)
         -   Other utility functions for data conversion and manipulation.
 
     -   **dataloader.py**: This module contains the `DataLoader` class, which is responsible for efficiently loading preprocessed graph data. The `DataLoader` supports two modes:

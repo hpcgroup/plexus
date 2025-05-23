@@ -8,7 +8,7 @@
 
 module load nccl
 module load cudatoolkit/12.4
-source <path/to/venv/bin/activate>
+source <path_to_venv/bin/activate>
 
 NNODES=$SLURM_JOB_NUM_NODES
 GPUS=$(( NNODES * 4 ))
@@ -44,9 +44,9 @@ G_INTRA_D=$3
 TRIAL_NUM=$4
 
 SCRIPT="train.py --G_intra_r ${G_INTRA_R} --G_intra_c ${G_INTRA_C} --G_intra_d ${G_INTRA_D} --gpus_per_node ${GPUS_PER_NODE} --num_epochs 10"
-SCRIPT="$SCRIPT --data_dir <path/to/dataset>"
+SCRIPT="$SCRIPT --data_dir <path_to_dataset>"
 
-run_cmd="srun -N $NNODES -n $GPUS -c 32 --cpu-bind=cores --gpus-per-node=4 ./get_rank.sh python -u $SCRIPT > <path/to/save/results/to>/<dataset/output/file/name>_X${G_INTRA_R}Y${G_INTRA_C}Z${G_INTRA_D}_${TRIAL_NUM}.txt 2>&1"
+run_cmd="srun -N $NNODES -n $GPUS -c 32 --cpu-bind=cores --gpus-per-node=4 ./get_rank.sh python -u $SCRIPT > <path_to_save_results_to>/<output_file_name>_X${G_INTRA_R}Y${G_INTRA_C}Z${G_INTRA_D}_${TRIAL_NUM}.txt 2>&1"
 
 echo $run_cmd
 eval $run_cmd

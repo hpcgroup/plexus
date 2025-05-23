@@ -159,7 +159,10 @@ if __name__ == "__main__":
         help="Number of multiplication iterations to time.",
     )
     parser.add_argument(
-        "--warmup", type=int, default=5, help="Number of warmup iterations."
+        "--warmup",
+        type=int,
+        default=5,
+        help="Number of warmup iterations.",
     )
 
     args = parser.parse_args()

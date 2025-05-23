@@ -207,7 +207,7 @@ def compute_config_costs(G, N, D_list, version, machine):
 
             comm_cost += fwd_comm + bwd_comm
 
-        config_to_cost[(X, Y, Z)] = comm_cost
+        config_to_cost[(X, Y, Z)] = comm_cost * 1000
 
     config_to_cost = dict(sorted(config_to_cost.items(), key=lambda item: item[1]))
 

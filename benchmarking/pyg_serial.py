@@ -37,7 +37,9 @@ def create_parser():
 
 def get_dataset(download_path=None):
     dataset = PygNodePropPredDataset(
-        name="ogbn-products", root=input_dir, transform=T.NormalizeFeatures()
+        name="ogbn-products",
+        root=input_dir,
+        transform=T.NormalizeFeatures(),
     )
     gcn_norm = T.GCNNorm()
     return (gcn_norm.forward(dataset[0]), dataset.num_classes)
@@ -96,11 +98,15 @@ if __name__ == "__main__":
     model = Net(num_input_features, num_classes).to(torch.device("cuda"))
 
     optimizer = torch.optim.AdamW(
-        list(model.parameters()) + [features_local], lr=3e-3, weight_decay=0
+        list(model.parameters()) + [features_local],
+        lr=3e-3,
+        weight_decay=0,
     )
 
     adj = torch.sparse_coo_tensor(
-        data.edge_index, data.edge_weight, (data.x.shape[0], data.x.shape[0])
+        data.edge_index,
+        data.edge_weight,
+        (data.x.shape[0], data.x.shape[0]),
     )
     adj = adj.to_sparse_csr()
     adj = adj.to(torch.device("cuda"))

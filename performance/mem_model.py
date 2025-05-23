@@ -38,10 +38,13 @@ def compute_config_mem(G, N, E, D_list):
     config_to_mem = {}
     for X, Y, Z in split_into_three_powers_of_two(G):
         # assuming E is roughly evenly distributed after permutation
-        # +1 for transposes
-        adj_mem = 2 * (E / (Z * X))
-        adj_mem += 2 * (E / (Y * Z))
-        adj_mem += 2 * (E / (X * Y))
+        adj_mem, divide_list = 0, [(Z, X), (Y, Z), (X, Y)]
+        for i in range(min(3, len(D_list))):
+            # +1 for A.T, CSR format
+            adj_mem += 2 * (
+                (E / (divide_list[i][0] * divide_list[i][1]) * 3)
+                + (N / divide_list[i][0] * 2)
+            )
 
         # +1 for grad, +2 for optimizer states
         # weights are sharded across depth dimension

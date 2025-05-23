@@ -11,13 +11,19 @@ from scipy.io import mmread, mmwrite
 from torch_geometric.data import Data
 import torch_geometric.transforms as T
 from numpy.core.multiarray import scalar
-from utils.general import pad_dimension, set_seed
+from plexus.utils.general import pad_dimension, set_seed
 from concurrent.futures import ThreadPoolExecutor
 from ogb.nodeproppred import PygNodePropPredDataset
 from torch_geometric.data.storage import GlobalStorage
 from torch_geometric.data.data import DataEdgeAttr, DataTensorAttr
-from torch_geometric.datasets import Reddit, SuiteSparseMatrixCollection
-from torch_geometric.utils.sparse import to_edge_index, to_torch_csr_tensor
+from torch_geometric.datasets import (
+    Reddit,
+    SuiteSparseMatrixCollection,
+)
+from torch_geometric.utils.sparse import (
+    to_edge_index,
+    to_torch_csr_tensor,
+)
 
 
 def preprocess_graph(
@@ -25,8 +31,10 @@ def preprocess_graph(
     input_dir: str,
     output_dir: str,
     double_perm: Optional[bool] = True,
+    unsupervised: Optional[bool] = False,
     num_features: Optional[int] = 128,
     num_classes: Optional[int] = 32,
+    directed: Optional[bool] = False,
 ):
     """
     Function to take the raw graph data and preprocess it
@@ -36,25 +44,29 @@ def preprocess_graph(
         input_dir: directory where original data is stored
         output_dir: directory where processed data should be saved
         double_perm: whether double permutation optimization should be applied or not
+        unsupervised: can specify if features/classes should be generated for the dataset
         num_features: can optionally specify number of input features for graphs without features data
         num_classes: can optionally specify number of classes for unlabeled data
-
+        directed: specifies if graph is directed and uses transpose of adjacency matrix if so for incoming message aggregation
     Returns:
         saves the preprocessed data to output_dir as a .pt file
     """
 
     # retrieve the unprocessed dataset and normalize the input features
-    unsupervised, directed = False, False
     if name == "reddit":
         dataset = Reddit(root=input_dir, transform=T.NormalizeFeatures())
     elif name == "products":
         dataset = PygNodePropPredDataset(
-            name="ogbn-products", root=input_dir, transform=T.NormalizeFeatures()
+            name="ogbn-products",
+            root=input_dir,
+            transform=T.NormalizeFeatures(),
         )
     elif name == "papers":
         directed = True
         dataset = PygNodePropPredDataset(
-            name="ogbn-papers100M", root=input_dir, transform=T.NormalizeFeatures()
+            name="ogbn-papers100M",
+            root=input_dir,
+            transform=T.NormalizeFeatures(),
         )
     elif name == "europe_osm":
         unsupervised = True
@@ -134,7 +146,9 @@ def preprocess_graph(
         if double_perm:
             col_indices_2 = perm2
             P2 = torch.sparse_coo_tensor(
-                torch.stack([row_indices, col_indices_2]), values, (N, N)
+                torch.stack([row_indices, col_indices_2]),
+                values,
+                (N, N),
             ).to_sparse_csr()
             gc.collect()
 
@@ -245,7 +259,10 @@ def write_to_mtx(file_path: str, output_dir: str):
     num_nodes = data.x.shape[0]
 
     # Convert to numpy
-    row, col = edge_index[0].cpu().numpy(), edge_index[1].cpu().numpy()
+    row, col = (
+        edge_index[0].cpu().numpy(),
+        edge_index[1].cpu().numpy(),
+    )
     weights = edge_weight.cpu().numpy()  # Use provided weights
 
     # Create a sparse weighted adjacency matrix
@@ -284,6 +301,28 @@ def mtx_to_pyg(mtx_file, output_file):
     # Save the processed graph to a .pt file
     torch.save(data, output_file)
     print(f"Saved processed graph to {output_file}")
+
+
+def tsv_to_pyg(tsv_file, output_file, N):
+    """
+    Reads a TSV file representing a graph, converts it to a PyTorch Geometric Data object,
+    and saves it to a file.
+    """
+
+    edge_list = []
+    values = []
+
+    with open(tsv_file, "r") as f:
+        for line in f:
+            parts = line.strip().split("\t")
+            edge_list.append([int(parts[0]), int(parts[1])])
+            values.append(float(parts[2]))
+
+    edge_index = torch.tensor(edge_list, dtype=torch.long).t().contiguous()
+    edge_attr = torch.tensor(values, dtype=torch.float)
+    data = Data(edge_index=edge_index, edge_attr=edge_attr, num_nodes=N)
+
+    torch.save(data, output_file)
 
 
 def print_nnz_stats(file_path: str, num_partitions: int):
@@ -373,7 +412,8 @@ def partition_graph_2d(file_path: str, num_partitions: int, output_dir: str):
 
     # save metadata
     torch.save(
-        (num_nodes, num_features, num_classes), os.path.join(output_dir, "metadata.pt")
+        (num_nodes, num_features, num_classes),
+        os.path.join(output_dir, "metadata.pt"),
     )
 
     # make directories where partitions will be stored
@@ -401,7 +441,8 @@ def partition_graph_2d(file_path: str, num_partitions: int, output_dir: str):
 
         features_start_idx = chunk_idx_dim2 * chunk_size_features
         features_stop_idx = min(
-            (chunk_idx_dim2 + 1) * chunk_size_features, data.x.shape[1]
+            (chunk_idx_dim2 + 1) * chunk_size_features,
+            data.x.shape[1],
         )
 
         valid_src = (edge_index_np[0, :] >= nodes_start_idx_dim1) & (
@@ -433,7 +474,10 @@ def partition_graph_2d(file_path: str, num_partitions: int, output_dir: str):
         torch.save(
             (adj_chunk.clone(), adj_weights_chunk.clone()),
             os.path.join(
-                output_dir, "edge_index", "0", f"{chunk_idx_dim1}_{chunk_idx_dim2}.pt"
+                output_dir,
+                "edge_index",
+                "0",
+                f"{chunk_idx_dim1}_{chunk_idx_dim2}.pt",
             ),
         )
 
@@ -464,7 +508,9 @@ def partition_graph_2d(file_path: str, num_partitions: int, output_dir: str):
         torch.save(
             features_chunk.clone(),
             os.path.join(
-                output_dir, "input_features", f"{chunk_idx_dim1}_{chunk_idx_dim2}.pt"
+                output_dir,
+                "input_features",
+                f"{chunk_idx_dim1}_{chunk_idx_dim2}.pt",
             ),
         )
 
@@ -473,7 +519,12 @@ def partition_graph_2d(file_path: str, num_partitions: int, output_dir: str):
             labels_chunk = data.y[nodes_start_idx_dim1:nodes_stop_idx_dim1]
             torch.save(
                 labels_chunk.clone(),
-                os.path.join(output_dir, "output_labels", "0", f"{chunk_idx_dim1}.pt"),
+                os.path.join(
+                    output_dir,
+                    "output_labels",
+                    "0",
+                    f"{chunk_idx_dim1}.pt",
+                ),
             )
 
             del labels_chunk
@@ -484,7 +535,10 @@ def partition_graph_2d(file_path: str, num_partitions: int, output_dir: str):
                 torch.save(
                     labels_chunk_2.clone(),
                     os.path.join(
-                        output_dir, "output_labels", "1", f"{chunk_idx_dim1}.pt"
+                        output_dir,
+                        "output_labels",
+                        "1",
+                        f"{chunk_idx_dim1}.pt",
                     ),
                 )
 
@@ -501,7 +555,11 @@ def partition_graph_2d(file_path: str, num_partitions: int, output_dir: str):
         for chunk_idx_dim1 in range(num_partitions):
             for chunk_idx_dim2 in range(num_partitions):
                 futures.append(
-                    executor.submit(process_partition, chunk_idx_dim1, chunk_idx_dim2)
+                    executor.submit(
+                        process_partition,
+                        chunk_idx_dim1,
+                        chunk_idx_dim2,
+                    )
                 )
 
         for future in futures:
