@@ -198,7 +198,8 @@ def preprocess_graph(
             print("Completed A = A * P.T\n")
 
         del P
-        del P2
+        if double_perm:
+            del P2
         gc.collect()
 
         # convert back to edge index format
