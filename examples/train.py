@@ -62,7 +62,7 @@ class Net(torch.nn.Module):
 
         self.num_gcn_layers = num_gcn_layers
 
-        self.layers = []
+        self.layers = torch.nn.ModuleList()
         for i in range(self.num_gcn_layers):
             if i == 0:
                 self.layers.append(GCNConv(input_size, hidden_size, i))

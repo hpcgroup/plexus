@@ -93,7 +93,7 @@ def chunked_spmm_all_reduce(csr_matrix, H, ar_group):
         # spmm for current chunk
 
         if not plx.overlap_agg:
-            ax.get_timers.start("AGG = A * H")
+            ax.get_timers().start("AGG = A * H")
 
         results[i] = torch.sparse.mm(chunk_edge_index, H)
 
@@ -184,9 +184,9 @@ class GCNConvFunction(torch.autograd.Function):
         if plx.block_agg:
             AGG = chunked_spmm_all_reduce(edge_index, H, aggregation_all_reduce_group)
         else:
-            ax.get_timers.start("AGG = A * H")
+            ax.get_timers().start("AGG = A * H")
             AGG = torch.sparse.mm(edge_index, H)
-            ax.get_timers.stop("AGG = A * H")
+            ax.get_timers().stop("AGG = A * H")
 
             _all_reduce(AGG, aggregation_all_reduce_group)
 

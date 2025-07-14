@@ -66,20 +66,25 @@ class TensorParallelCrossEntropy(torch.autograd.Function):
         ) | (target < 0)
         softmax[invalid_nodes, :] = 0.0
 
-        # create mask for classes that are outside the local range of classes
-        invalid_logits_mask = (target < (ranks[1] * logits.shape[1])) | (
-            target >= ((ranks[1] + 1) * logits.shape[1])
-        )
+        # # create mask for classes that are outside the local range of classes
+        # invalid_logits_mask = (target < (ranks[1] * logits.shape[1])) | (
+        #     target >= ((ranks[1] + 1) * logits.shape[1])
+        # )
 
-        # convert from global label to local label
-        target[~invalid_logits_mask] -= ranks[1] * logits.shape[1]
-        target[invalid_logits_mask] = 0
+        # # convert from global label to local label
+        # target[~invalid_logits_mask] -= ranks[1] * logits.shape[1]
+        # target[invalid_logits_mask] = 0
 
-        # create one hot vector from the labels
-        target = F.one_hot(target, num_classes=logits.shape[1])
+        # # create one hot vector from the labels
+        # target = F.one_hot(target, num_classes=logits.shape[1])
 
-        # for labels out of the local range, make the target vector 0
-        target[invalid_logits_mask] = 0
+        # # for labels out of the local range, make the target vector 0
+        # target[invalid_logits_mask] = 0
+        
+        target = F.one_hot(target, num_classes=(logits.shape[1] * num_gpus[1]))
+        target = target[
+            :, (ranks[1] * logits.shape[1]) : ((ranks[1] + 1) * logits.shape[1])
+        ]
 
         # save softmax and target for backward pass
         ctx.save_for_backward(softmax, target)

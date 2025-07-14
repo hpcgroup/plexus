@@ -479,6 +479,8 @@ class DataLoader:
                     os.path.join(self.data_dir, pt_files[0]),
                     weights_only=False,
                 )
+                
+                self.double_perm = hasattr(self.data, "edge_index_2")
 
                 self.__set_graph_attributes()
 
@@ -496,7 +498,7 @@ class DataLoader:
                         adj_shards.append(
                             self.__split_adj(
                                 self.data.edge_index_2,
-                                self.data.edge_weight,
+                                self.data.edge_weight_2,
                                 i,
                             )
                         )
