@@ -25,6 +25,12 @@ from torch_geometric.utils.sparse import (
     to_torch_csr_tensor,
 )
 
+torch.serialization.add_safe_globals([
+    DataEdgeAttr,
+    DataTensorAttr,
+    GlobalStorage,
+])
+
 
 def preprocess_graph(
     name: str,
@@ -74,11 +80,11 @@ def preprocess_graph(
     elif name == "protein":
         # input_dir is actually path for .pt file
         unsupervised = True
-        dataset = [torch.load(input_dir)]
+        dataset = [torch.load(input_dir, weights_only=False)]
     elif name == "amazon":
         # input_dir is actually path for .pt file
         unsupervised = True
-        dataset = [torch.load(input_dir)]
+        dataset = [torch.load(input_dir, weights_only=False)]
     else:
         raise Exception(name + " dataset not supported")
 
@@ -252,7 +258,7 @@ def preprocess_graph(
 
 def write_to_mtx(file_path: str, output_dir: str):
     # Load the .pt file
-    data, _ = torch.load(file_path)
+    data, _ = torch.load(file_path, weights_only=False)
 
     # Extract edge index and weights
     edge_index = data.edge_index  # Shape: [2, num_edges]
@@ -327,7 +333,7 @@ def tsv_to_pyg(tsv_file, output_file, N):
 
 
 def print_nnz_stats(file_path: str, num_partitions: int):
-    data, _ = torch.load(file_path)
+    data, _ = torch.load(file_path, weights_only=False)
     N, edge_index = data.num_nodes, data.edge_index
 
     # Determine chunk size
