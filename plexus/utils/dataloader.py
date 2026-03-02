@@ -3,8 +3,10 @@ import os
 import glob
 import torch
 from typing import Optional
+import torch.distributed as dist
 import torch.nn.functional as F
 from torch_geometric.data import Data
+from plexus import plexus as plx
 from plexus.utils.general import pad_dimension, get_process_groups_info
 
 
@@ -42,7 +44,9 @@ class DataLoader:
         # directory where the partitioned adj matrix and features are stored
         if self.partitioned:
             self.adj_dir = os.path.join(data_dir, "edge_index")
+            self.adj_train_dir = os.path.join(data_dir, "edge_index_train")
             self.features_dir = os.path.join(data_dir, "input_features")
+            self.masks_dir = os.path.join(data_dir, "masks")
 
     def __set_graph_attributes(self):
         # get number of nodes and features
@@ -89,12 +93,22 @@ class DataLoader:
         # following calculations are for indices to shard
         # the output labels by
 
-        if self.num_gcn_layers % 3 == 1:
-            labels_gpu_idx = 0
-        elif self.num_gcn_layers % 3 == 2:
-            labels_gpu_idx = 2
+        group_to_idx = {"z": 0, "x": 1, "y": 2}
+        if plx.use_3d_linear:
+            if self.num_gcn_layers % 3 == 1:
+                labels_group = "y"
+            elif self.num_gcn_layers % 3 == 2:
+                labels_group = "z"
+            else:
+                labels_group = "x"
         else:
-            labels_gpu_idx = 1
+            if self.num_gcn_layers % 3 == 1:
+                labels_group = "z"
+            elif self.num_gcn_layers % 3 == 2:
+                labels_group = "y"
+            else:
+                labels_group = "x"
+        labels_gpu_idx = group_to_idx[labels_group]
 
         self.labels_start = ranks[labels_gpu_idx] * (
             pad_dimension(self.num_nodes, num_gpus[labels_gpu_idx])
@@ -114,25 +128,20 @@ class DataLoader:
             self.adj_dim2_start,
             self.adj_dim2_stop,
         ) = ([], [], [], [])
+        if plx.use_3d_linear:
+            adj_groups = (("y", "x"), ("z", "y"), ("x", "z"))
+        else:
+            adj_groups = (("z", "x"), ("y", "z"), ("x", "y"))
+
         for i in range(min(3, self.num_gcn_layers)):
-            if i == 0:
-                dim1_num_gpus, dim2_num_gpus = (
-                    num_gpus[0],
-                    num_gpus[1],
-                )
-                rank1, rank2 = ranks[0], ranks[1]
-            elif i == 1:
-                dim1_num_gpus, dim2_num_gpus = (
-                    num_gpus[2],
-                    num_gpus[0],
-                )
-                rank1, rank2 = ranks[2], ranks[0]
-            else:
-                dim1_num_gpus, dim2_num_gpus = (
-                    num_gpus[1],
-                    num_gpus[2],
-                )
-                rank1, rank2 = ranks[1], ranks[2]
+            dim1_letter, dim2_letter = adj_groups[i]
+            dim1_idx = group_to_idx[dim1_letter]
+            dim2_idx = group_to_idx[dim2_letter]
+            dim1_num_gpus, dim2_num_gpus = (
+                num_gpus[dim1_idx],
+                num_gpus[dim2_idx],
+            )
+            rank1, rank2 = ranks[dim1_idx], ranks[dim2_idx]
 
             dim1_step = pad_dimension(self.num_nodes, dim1_num_gpus) // dim1_num_gpus
             dim2_step = pad_dimension(self.num_nodes, dim2_num_gpus) // dim2_num_gpus
@@ -152,11 +161,13 @@ class DataLoader:
             self.adj_dim2_start.append(dim2_start)
             self.adj_dim2_stop.append(dim2_stop)
 
-    def __merge_adj_partitions(self, layer_num):
+    def __merge_adj_partitions(self, layer_num, adj_dir=None):
         """
         loads the relevant partitioned files for the layer_num adj matrix shard
         and merges them into one tensor
         """
+        if adj_dir is None:
+            adj_dir = self.adj_dir
 
         partition_size = (
             pad_dimension(self.num_nodes, self.num_partitions_dim)
@@ -202,7 +213,7 @@ class DataLoader:
                 ),
             ):
                 curr_edge_index, curr_values = torch.load(
-                    f"{self.adj_dir}/{adj_num}/{partition_idx_dim1}_{partition_idx_dim2}.pt"
+                    f"{adj_dir}/{adj_num}/{partition_idx_dim1}_{partition_idx_dim2}.pt"
                 )
                 merged_indices = torch.cat((merged_indices, curr_edge_index), dim=1)
                 merged_values = torch.cat((merged_values, curr_values), dim=0)
@@ -295,7 +306,7 @@ class DataLoader:
             self.labels_start // partition_size
         ) * partition_size
 
-        merged_labels = torch.empty(0)
+        merged_labels = None
 
         labels_num = 0
         if self.double_perm and self.num_gcn_layers % 2 == 0:
@@ -314,15 +325,62 @@ class DataLoader:
             curr_partition = torch.load(
                 f"{self.labels_dir}/{labels_num}/{partition_idx}.pt"
             )
-            merged_labels = torch.cat(
-                (merged_labels, curr_partition),
+            if merged_labels is None:
+                merged_labels = curr_partition
+            else:
+                merged_labels = torch.cat((merged_labels, curr_partition), dim=0)
+
+            del curr_partition
+            gc.collect()
+
+        if merged_labels is None:
+            merged_labels = torch.empty(0)
+        return merged_labels
+
+    def __merge_mask_partitions(self, split: str, mask_num: int):
+        """
+        Loads the relevant partitioned files for a node mask (train/val/test)
+        and merges them into one tensor.
+        """
+
+        mask_dir = os.path.join(self.masks_dir, split, str(mask_num))
+        if not os.path.isdir(mask_dir):
+            return None
+
+        partition_size = (
+            pad_dimension(self.num_nodes, self.num_partitions_dim)
+            // self.num_partitions_dim
+        )
+
+        self.partition_labels_start = (
+            self.labels_start // partition_size
+        ) * partition_size
+
+        merged_mask = torch.empty(0, dtype=torch.bool)
+
+        for partition_idx in range(
+            min(
+                self.labels_start // partition_size,
+                self.num_partitions_dim,
+            ),
+            min(
+                ((self.labels_stop - 1) // partition_size) + 1,
+                self.num_partitions_dim,
+            ),
+        ):
+            path = os.path.join(mask_dir, f"{partition_idx}.pt")
+            if not os.path.exists(path):
+                return None
+            curr_partition = torch.load(path)
+            merged_mask = torch.cat(
+                (merged_mask, torch.as_tensor(curr_partition).to(torch.bool)),
                 dim=0,
             )
 
             del curr_partition
             gc.collect()
 
-        return merged_labels
+        return merged_mask
 
     def __split_adj(self, edge_index, edge_weight, layer_num):
         """
@@ -365,16 +423,38 @@ class DataLoader:
         gc.collect()
 
         adj_local = adj_local.to_sparse_csr()
-        adj_local_t = adj_local.transpose(0, 1).to_sparse_csr()
+
+        # INT32 CSR indices optimisation (valid when N < 2^31)
+        if plx.int32_indices:
+            adj_local = torch.sparse_csr_tensor(
+                adj_local.crow_indices().to(torch.int32),
+                adj_local.col_indices().to(torch.int32),
+                adj_local.values(),
+                size=adj_local.size(),
+            )
+
+        # A^T: skip pre-computation when no_adj_transpose is set
+        if plx.no_adj_transpose:
+            adj_local_t = None
+        else:
+            adj_local_t = adj_local.transpose(0, 1).to_sparse_csr()
+            if plx.int32_indices:
+                adj_local_t = torch.sparse_csr_tensor(
+                    adj_local_t.crow_indices().to(torch.int32),
+                    adj_local_t.col_indices().to(torch.int32),
+                    adj_local_t.values(),
+                    size=adj_local_t.size(),
+                )
 
         adj_local = adj_local.to(torch.device("cuda"))
-        adj_local_t = adj_local_t.to(torch.device("cuda"))
+        if adj_local_t is not None:
+            adj_local_t = adj_local_t.to(torch.device("cuda"))
 
         gc.collect()
 
         return adj_local, adj_local_t
 
-    def __split_features(self, features_matrix):
+    def __split_features(self, features_matrix, train_features: bool):
         """
         gets the relevant shard of the input features matrix
         """
@@ -419,9 +499,15 @@ class DataLoader:
             (0, num_features_to_pad, 0, num_nodes_to_pad),
         )
 
-        features_local = features_local.reshape(-1)[self.depth_start : self.depth_stop]
+        if train_features:
+            # Shard across depth only when training features (reduce-scatter in bwd).
+            features_local = features_local.reshape(-1)[
+                self.depth_start : self.depth_stop
+            ]
 
-        features_local = features_local.to(torch.device("cuda")).requires_grad_()
+        features_local = features_local.to(torch.device("cuda")).requires_grad_(
+            train_features
+        )
 
         gc.collect()
 
@@ -445,24 +531,62 @@ class DataLoader:
         del output_labels
         gc.collect()
 
-        num_labels_to_pad = (self.labels_stop - self.labels_start) - output_local.shape[
-            0
-        ]
-        output_local = F.pad(output_local, (0, num_labels_to_pad)).to(torch.int64)
-
-        output_local = output_local.to(torch.device("cuda"))
+        num_labels_to_pad = (self.labels_stop - self.labels_start) - output_local.shape[0]
+        if output_local.ndim == 2:
+            if num_labels_to_pad > 0:
+                output_local = F.pad(
+                    output_local,
+                    (0, 0, 0, num_labels_to_pad),
+                    value=float("nan"),
+                )
+            output_local = output_local.to(torch.float32).to(torch.device("cuda"))
+        else:
+            output_local = F.pad(output_local, (0, num_labels_to_pad)).to(torch.int64)
+            output_local = output_local.to(torch.device("cuda"))
 
         gc.collect()
 
         return output_local
 
-    def load(self):
+    def __split_mask(self, mask):
+        """
+        Gets the relevant shard of a 1D node mask (train/val/test) and pads it.
+        """
+
+        if mask is None:
+            return None
+
+        mask = torch.as_tensor(mask).reshape(-1).to(torch.bool)
+
+        if not self.partitioned:
+            mask_local = mask[self.labels_start : self.labels_stop]
+        else:
+            local_labels_start, local_labels_stop = (
+                self.labels_start - self.partition_labels_start,
+                self.labels_stop - self.partition_labels_start,
+            )
+            mask_local = mask[local_labels_start:local_labels_stop]
+
+        num_to_pad = (self.labels_stop - self.labels_start) - mask_local.shape[0]
+        if num_to_pad > 0:
+            mask_local = torch.cat(
+                (
+                    mask_local,
+                    torch.zeros(num_to_pad, dtype=torch.bool, device=mask_local.device),
+                ),
+                dim=0,
+            )
+
+        return mask_local.to(torch.device("cuda"))
+
+    def load(self, load_train_adj: bool = False, train_features: bool = False):
         """
         Call this function on the DataLoader to load the relevant shards of data
         """
 
         with torch.no_grad():
             adj_shards = []
+            adj_shards_train = None
 
             # number of adjacency shards needed doubles if double permutation optimization is applied
             if self.double_perm:
@@ -502,6 +626,32 @@ class DataLoader:
                                 i,
                             )
                         )
+
+                if load_train_adj:
+                    if hasattr(self.data, "edge_index_train") and hasattr(
+                        self.data, "edge_weight_train"
+                    ):
+                        adj_shards_train = []
+                        for i in range(num_adj_shards):
+                            if not self.double_perm or i % 2 == 0:
+                                edge_index = self.data.edge_index_train
+                                edge_weight = self.data.edge_weight_train
+                            else:
+                                edge_index = getattr(self.data, "edge_index_train_2", None)
+                                edge_weight = getattr(
+                                    self.data, "edge_weight_train_2", None
+                                )
+                            if edge_index is None or edge_weight is None:
+                                adj_shards_train = None
+                                break
+                            adj_shards_train.append(
+                                self.__split_adj(edge_index, edge_weight, i)
+                            )
+                    if adj_shards_train is None and dist.is_initialized() and dist.get_rank() == 0:
+                        print(
+                            "[warn] requested train-induced adjacency, but no `edge_index_train` was found; "
+                            "re-run preprocessing/partitioning to generate it."
+                        )
             else:
                 self.__set_graph_attributes()
 
@@ -518,24 +668,68 @@ class DataLoader:
                         self.__split_adj(self.edge_index, self.edge_weight, i)
                     )
 
+                if load_train_adj and os.path.isdir(getattr(self, "adj_train_dir", "")):
+                    adj_shards_train = []
+                    for i in range(num_adj_shards):
+                        edge_index, edge_weight = self.__merge_adj_partitions(
+                            i, adj_dir=self.adj_train_dir
+                        )
+                        adj_shards_train.append(
+                            self.__split_adj(edge_index, edge_weight, i)
+                        )
+                elif load_train_adj and dist.is_initialized() and dist.get_rank() == 0:
+                    print(
+                        "[warn] requested train-induced adjacency, but no `edge_index_train/` directory was found; "
+                        "re-run partitioning to generate it."
+                    )
+
             del self.data.edge_index
             del self.data.edge_weight
             gc.collect()
 
             # get the features shard
-            input_features = self.__split_features(self.data.x)
+            input_features = self.__split_features(self.data.x, train_features)
 
             # get the labels shard
-            if not self.double_perm or self.num_gcn_layers % 2 != 0:
+            if self.partitioned:
+                output_labels = self.__split_output(self.data.y)
+            elif not self.double_perm or self.num_gcn_layers % 2 != 0:
                 output_labels = self.__split_output(self.data.y)
             else:
                 output_labels = self.__split_output(self.data.y_2)
 
+            masks = None
+            if self.double_perm and self.num_gcn_layers % 2 == 0:
+                labels_num = 1
+                mask_suffix = "_2"
+            else:
+                labels_num = 0
+                mask_suffix = ""
+
+            if not self.partitioned:
+                train_mask = getattr(self.data, f"train_mask{mask_suffix}", None)
+                val_mask = getattr(self.data, f"val_mask{mask_suffix}", None)
+                test_mask = getattr(self.data, f"test_mask{mask_suffix}", None)
+            else:
+                train_mask = self.__merge_mask_partitions("train", labels_num)
+                val_mask = self.__merge_mask_partitions("val", labels_num)
+                test_mask = self.__merge_mask_partitions("test", labels_num)
+
+            masks = {
+                "train": self.__split_mask(train_mask),
+                "val": self.__split_mask(val_mask),
+                "test": self.__split_mask(test_mask),
+            }
+            if all(v is None for v in masks.values()):
+                masks = None
+
             # return relevant shards of the data and some metadata
             return (
                 adj_shards,
+                adj_shards_train,
                 input_features,
                 output_labels,
+                masks,
                 self.num_nodes,
                 self.num_features,
                 self.num_classes,

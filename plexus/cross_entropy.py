@@ -1,4 +1,4 @@
-# Copyright 2025 Parallel Software and Systems Group, University of Maryland.
+# Copyright 2025 Parallel Software and Systems Group, University of Maryland._all_reducetimer
 # See the top-level LICENSE file for details.
 #
 # SPDX-License-Identifier: MIT
@@ -7,7 +7,22 @@ import torch
 from axonn import axonn as ax
 import torch.nn.functional as F
 import torch.distributed as dist
+from plexus import plexus as plx
 from plexus.utils.general import get_process_groups_info
+
+
+def _loss_groups(num_layers: int):
+    if plx.use_3d_linear:
+        if num_layers % 3 == 1:
+            return ("y", "z")
+        if num_layers % 3 == 2:
+            return ("z", "x")
+        return ("x", "y")
+    if num_layers % 3 == 1:
+        return ("z", "x")
+    if num_layers % 3 == 2:
+        return ("y", "z")
+    return ("x", "y")
 
 
 class TensorParallelCrossEntropy(torch.autograd.Function):
@@ -19,14 +34,8 @@ class TensorParallelCrossEntropy(torch.autograd.Function):
     def forward(ctx, logits, target, num_layers, num_nodes, num_classes):
         ax.get_timers().start("cross entropy fwd")
 
-        # select appropriate process groups for last layer depending
-        # on the number of layers
-        if num_layers % 3 == 1:
-            groups = ("z", "x")
-        elif num_layers % 3 == 2:
-            groups = ("y", "z")
-        else:
-            groups = ("x", "y")
+        # select appropriate process groups for last layer
+        groups = _loss_groups(num_layers)
 
         num_gpus, ranks, process_groups = get_process_groups_info(groups)
 
@@ -43,7 +52,9 @@ class TensorParallelCrossEntropy(torch.autograd.Function):
         logits_max = torch.max(logits, dim=1)[0]
 
         # all reduce to get max across all logits
+        # ax.get_timers().start("logits_max all reduce")
         dist.all_reduce(logits_max, op=dist.ReduceOp.MAX, group=process_groups[1])
+        # ax.get_timers().stop("logits_max all reduce")
 
         # calculate numerator expression
         numerator = torch.exp(logits - logits_max.unsqueeze(1))
@@ -51,20 +62,23 @@ class TensorParallelCrossEntropy(torch.autograd.Function):
         # calculate local sum across numerator to get denominator
         # all reduce to get sum across all classes
         denominator = torch.sum(numerator, dim=1)
+        # ax.get_timers().start("denominator all reduce")
         dist.all_reduce(denominator, op=dist.ReduceOp.SUM, group=process_groups[1])
+        # ax.get_timers().stop("denominator all reduce")
 
         # calculate the softmax based on the numerator and denominator
         softmax = numerator / denominator.unsqueeze(1)
 
-        # invalid nodes are those that are padded and/or don't have a positive label
-        invalid_nodes = (
-            (
-                torch.arange(logits.shape[0], device=target.device)
-                + (ranks[0] * logits.shape[0])
-            )
-            >= num_nodes
-        ) | (target < 0)
-        softmax[invalid_nodes, :] = 0.0
+        global_node_idx = torch.arange(logits.shape[0], device=target.device) + (
+            ranks[0] * logits.shape[0]
+        )
+        invalid_nodes = global_node_idx >= num_nodes
+
+        target = target.clone()
+        invalid_target = target < 0
+        if invalid_target.any():
+            target[invalid_target] = 0
+            invalid_nodes = invalid_nodes | invalid_target
 
         # # create mask for classes that are outside the local range of classes
         # invalid_logits_mask = (target < (ranks[1] * logits.shape[1])) | (
@@ -86,6 +100,10 @@ class TensorParallelCrossEntropy(torch.autograd.Function):
             :, (ranks[1] * logits.shape[1]) : ((ranks[1] + 1) * logits.shape[1])
         ]
 
+        if invalid_nodes.any():
+            softmax[invalid_nodes, :] = 0.0
+            target[invalid_nodes, :] = 0
+
         # save softmax and target for backward pass
         ctx.save_for_backward(softmax, target)
 
@@ -94,16 +112,24 @@ class TensorParallelCrossEntropy(torch.autograd.Function):
         loss = torch.sum(-torch.log(softmax.clamp(min=epsilon)) * target, dim=1)
 
         # all reduce loss across all classes
+        # ax.get_timers().start("loss all reduce")
         dist.all_reduce(loss, op=dist.ReduceOp.SUM, group=process_groups[1])
+        # ax.get_timers().stop("loss all reduce")
 
         # sum losses for all nodes and then all reduce across all nodes
         ctx.num_nodes = num_nodes
 
         loss_sum = torch.sum(loss)
+        # ax.get_timers().start("loss_sum all reduce")
         dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=process_groups[0])
+        # ax.get_timers().stop("loss_sum all reduce")
 
-        # divide loss by number of nodes in graph
-        avg_loss = loss_sum / ctx.num_nodes
+        # average over valid (non-padded, non-masked) nodes
+        valid_count = (~invalid_nodes).sum().to(torch.long)
+        dist.all_reduce(valid_count, op=dist.ReduceOp.SUM, group=process_groups[0])
+        ctx.loss_divisor = valid_count.clamp_min(1)
+
+        avg_loss = loss_sum / ctx.loss_divisor
 
         ax.get_timers().stop("cross entropy fwd")
 
@@ -114,12 +140,110 @@ class TensorParallelCrossEntropy(torch.autograd.Function):
         # calculate gradient of loss with respect to the logits
         ax.get_timers().start("cross entropy bwd")
         softmax, target = ctx.saved_tensors
-        grad_input = (softmax - target) / ctx.num_nodes
+        grad_input = (softmax - target) / ctx.loss_divisor
         ax.get_timers().stop("cross entropy bwd")
         return grad_input * grad_output, None, None, None, None
 
 
-def parallel_cross_entropy(logits, target, groups, num_nodes, num_classes):
+def parallel_cross_entropy(logits, target, groups, num_nodes, num_classes, node_mask=None):
+    if node_mask is not None:
+        if node_mask.ndim != 1:
+            node_mask = node_mask.reshape(-1)
+        if node_mask.shape[0] != target.shape[0]:
+            raise ValueError(
+                f"node_mask must match target length (got {node_mask.shape[0]} vs {target.shape[0]})"
+            )
+        target = target.clone()
+        target[~node_mask.to(torch.bool)] = -1
     return TensorParallelCrossEntropy.apply(
         logits, target, groups, num_nodes, num_classes
     )
+
+
+class TensorParallelBCEWithLogits(torch.autograd.Function):
+    """
+    Parallel BCE-with-logits implementation for multi-label classification.
+    Assumes logits are sharded across the class group (like TensorParallelCrossEntropy).
+    """
+
+    @staticmethod
+    def forward(ctx, logits, target, num_layers, num_nodes, num_classes):
+        ax.get_timers().start("bce fwd")
+
+        groups = _loss_groups(num_layers)
+
+        num_gpus, ranks, process_groups = get_process_groups_info(groups)
+
+        local_num_classes = int(logits.shape[1])
+        class_offset = ranks[1] * local_num_classes
+
+        invalid_classes = (
+            torch.arange(local_num_classes, device=logits.device) + class_offset
+        ) >= num_classes
+
+        global_node_idx = torch.arange(logits.shape[0], device=logits.device) + (
+            ranks[0] * logits.shape[0]
+        )
+        invalid_nodes = global_node_idx >= num_nodes
+
+        if target.ndim != 2:
+            raise ValueError(
+                f"TensorParallelBCEWithLogits expects 2D multi-label targets; got shape {tuple(target.shape)}"
+            )
+
+        # Select this rank's class shard.
+        target_local = target[:, class_offset : class_offset + local_num_classes]
+        target_local = target_local.to(dtype=logits.dtype)
+
+        labeled = torch.isfinite(target_local)
+        if invalid_classes.any():
+            labeled[:, invalid_classes] = False
+        if invalid_nodes.any():
+            labeled[invalid_nodes, :] = False
+
+        target_filled = torch.nan_to_num(target_local, nan=0.0)
+
+        per_entry = F.binary_cross_entropy_with_logits(
+            logits, target_filled, reduction="none"
+        )
+        labeled_f = labeled.to(per_entry.dtype)
+        per_entry = per_entry * labeled_f
+
+        # Reduce total loss and total labeled count across both class and node groups.
+        loss_sum = per_entry.sum()
+        dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=process_groups[1])
+        dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=process_groups[0])
+
+        labeled_count = labeled.sum().to(torch.long)
+        dist.all_reduce(labeled_count, op=dist.ReduceOp.SUM, group=process_groups[1])
+        dist.all_reduce(labeled_count, op=dist.ReduceOp.SUM, group=process_groups[0])
+        ctx.loss_divisor = labeled_count.clamp_min(1)
+
+        sigmoid = torch.sigmoid(logits)
+        ctx.save_for_backward(sigmoid, target_filled, labeled_f)
+
+        avg_loss = loss_sum / ctx.loss_divisor
+
+        ax.get_timers().stop("bce fwd")
+        return avg_loss
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        ax.get_timers().start("bce bwd")
+        sigmoid, target_filled, labeled_f = ctx.saved_tensors
+        grad_input = (sigmoid - target_filled) * labeled_f / ctx.loss_divisor
+        ax.get_timers().stop("bce bwd")
+        return grad_input * grad_output, None, None, None, None
+
+
+def parallel_bce_with_logits(logits, target, groups, num_nodes, num_classes, node_mask=None):
+    if node_mask is not None:
+        if node_mask.ndim != 1:
+            node_mask = node_mask.reshape(-1)
+        if node_mask.shape[0] != target.shape[0]:
+            raise ValueError(
+                f"node_mask must match target length (got {node_mask.shape[0]} vs {target.shape[0]})"
+            )
+        target = target.clone()
+        target[~node_mask.to(torch.bool)] = float("nan")
+    return TensorParallelBCEWithLogits.apply(logits, target, groups, num_nodes, num_classes)

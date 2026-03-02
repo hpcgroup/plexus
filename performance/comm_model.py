@@ -101,9 +101,9 @@ def compute_config_costs(G, N, D_list, version, machine):
     config_to_cost = {}
     for X, Y, Z in split_into_three_powers_of_two(G):
         AR_agg_dict, AR_out_dict, AG_dict = (
-            {0: "X", 1: "Z", 2: "Y"},
-            {0: "Y", 1: "X", 2: "Z"},
-            {0: "Z", 1: "Y", 2: "X"},
+            {0: "X", 1: "Y", 2: "Z"},
+            {0: "Z", 1: "X", 2: "Y"},
+            {0: "Y", 1: "Z", 2: "X"},
         )
         num_gpus_dict = {"X": X, "Y": Y, "Z": Z}
 

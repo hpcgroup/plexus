@@ -73,6 +73,105 @@ def _load_ogb_dataset_compat(name: str, root: str):
         torch.load = original_torch_load
 
 
+def _load_mag_scholar(input_dir: str, variant: str, svd_dim: int = 128):
+    """
+    Load MAG-Scholar dataset from npz file and reduce sparse BoW features
+    via randomized SVD.
+
+    Args:
+        input_dir: directory containing mag_coarse.npz / mag_fine.npz
+        variant: "coarse" or "fine"
+        svd_dim: target dimensionality after SVD (default: 128)
+
+    Returns:
+        data: PyG Data object with dense x, edge_index, y, and train/val/test masks
+        num_classes: int
+    """
+    from sklearn.decomposition import TruncatedSVD
+
+    npz_path = os.path.join(input_dir, f"mag_{variant}.npz")
+    print(f"Loading MAG-Scholar ({variant}) from {npz_path} ...")
+    raw = np.load(npz_path, allow_pickle=True)
+    print(f"  npz keys: {raw.files}")
+
+    # Reconstruct adjacency CSR matrix
+    adj = sp.csr_matrix((
+        raw['adj_matrix.data'],
+        raw['adj_matrix.indices'],
+        raw['adj_matrix.indptr'],
+    ), shape=tuple(raw['adj_matrix.shape']))
+    print(f"  Adjacency: {adj.shape[0]:,} nodes, {adj.nnz:,} edges")
+
+    # Reconstruct attribute (sparse BoW) CSR matrix
+    attr = sp.csr_matrix((
+        raw['attr_matrix.data'],
+        raw['attr_matrix.indices'],
+        raw['attr_matrix.indptr'],
+    ), shape=tuple(raw['attr_matrix.shape']))
+    print(f"  Attributes: {attr.shape[0]:,} x {attr.shape[1]:,} (sparse BoW)")
+
+    # Labels
+    labels = raw['labels']
+    class_names = raw['class_names']
+    num_classes = len(class_names)
+    print(f"  Classes: {num_classes} ({list(class_names[:5])}...)")
+
+    del raw
+    gc.collect()
+
+    # SVD dimensionality reduction: sparse 2.78M-dim -> svd_dim dense
+    print(f"  Running TruncatedSVD: {attr.shape[1]:,} -> {svd_dim} dims ...")
+    svd = TruncatedSVD(n_components=svd_dim, algorithm='randomized', random_state=42)
+    x_dense = svd.fit_transform(attr.astype(np.float32))
+    explained = svd.explained_variance_ratio_.sum()
+    print(f"  SVD explained variance ratio: {explained:.4f}")
+    x_dense = x_dense.astype(np.float32)
+
+    del attr, svd
+    gc.collect()
+
+    # Convert adjacency to PyG edge_index via COO
+    adj_coo = adj.tocoo()
+    edge_index = torch.tensor(
+        np.vstack([adj_coo.row, adj_coo.col]),
+        dtype=torch.long,
+    )
+    del adj, adj_coo
+    gc.collect()
+
+    # Construct PyG Data
+    N = x_dense.shape[0]
+    data = Data(
+        x=torch.from_numpy(x_dense),
+        edge_index=edge_index,
+        y=torch.from_numpy(labels.astype(np.int64)),
+        num_nodes=N,
+    )
+    del x_dense, labels
+    gc.collect()
+
+    # Generate random 60/20/20 train/val/test split
+    perm = np.random.permutation(N)
+    train_end = int(0.6 * N)
+    val_end = int(0.8 * N)
+
+    train_mask = torch.zeros(N, dtype=torch.bool)
+    val_mask = torch.zeros(N, dtype=torch.bool)
+    test_mask = torch.zeros(N, dtype=torch.bool)
+    train_mask[perm[:train_end]] = True
+    val_mask[perm[train_end:val_end]] = True
+    test_mask[perm[val_end:]] = True
+
+    data.train_mask = train_mask
+    data.val_mask = val_mask
+    data.test_mask = test_mask
+
+    print(f"  Split: train={train_mask.sum().item():,}, "
+          f"val={val_mask.sum().item():,}, test={test_mask.sum().item():,}")
+
+    return data, num_classes
+
+
 def _normalize_gcn_edges(edge_index: torch.Tensor, num_nodes: int, edge_weight=None):
     """
     Apply GCN normalization to a given edge list.
@@ -98,11 +197,60 @@ def _normalize_gcn_edges(edge_index: torch.Tensor, num_nodes: int, edge_weight=N
     return edge_index, edge_weight
 
 
+def _normalize_row_edges(edge_index: torch.Tensor, num_nodes: int, edge_weight=None):
+    """
+    Apply row normalization (D^{-1} A) to a given edge list.
+    Each row sums to 1 (outgoing weights normalized by source degree).
+    """
+    if edge_weight is None:
+        edge_weight = torch.ones(
+            edge_index.size(1), dtype=torch.float32, device=edge_index.device
+        )
+    else:
+        edge_weight = torch.as_tensor(
+            edge_weight, dtype=torch.float32, device=edge_index.device
+        )
+
+    row = edge_index[0]
+    deg = scatter(edge_weight, row, dim=0, dim_size=num_nodes, reduce="sum")
+    deg_inv = deg.pow(-1.0)
+    deg_inv.masked_fill_(torch.isinf(deg_inv), 0.0)
+    edge_weight = deg_inv[row] * edge_weight
+
+    return edge_index, edge_weight
+
+
+def _apply_normalization(data, norm_type: str = "symmetric"):
+    """
+    Unified normalization entry point.
+      - "symmetric": D^{-0.5} A D^{-0.5}  (GCNNorm, adds self-loops automatically)
+      - "row":       D^{-1} A              (row-stochastic, manual self-loops)
+    """
+    if norm_type == "symmetric":
+        return T.GCNNorm().forward(data)
+    elif norm_type == "row":
+        edge_index, edge_weight = remove_self_loops(
+            data.edge_index, getattr(data, "edge_weight", None)
+        )
+        edge_index, edge_weight = add_self_loops(
+            edge_index, edge_weight, num_nodes=data.num_nodes
+        )
+        edge_index, edge_weight = _normalize_row_edges(
+            edge_index, data.num_nodes, edge_weight
+        )
+        data.edge_index = edge_index
+        data.edge_weight = edge_weight
+        return data
+    else:
+        raise ValueError(f"Unknown norm_type={norm_type!r}; expected 'symmetric' or 'row'")
+
+
 def _build_train_induced_adj_for_papers(
     edge_index_raw: torch.Tensor,
     edge_weight_raw,
     train_mask: torch.Tensor,
     num_nodes: int,
+    norm_type: str = "symmetric",
 ):
     """
     Build train-induced adjacency for papers100M without introducing self-loops
@@ -137,9 +285,14 @@ def _build_train_induced_adj_for_papers(
         train_edge_index = torch.cat((train_edge_index, loop_index), dim=1)
         train_edge_weight = torch.cat((train_edge_weight, loop_weight), dim=0)
 
-    train_edge_index, train_edge_weight = _normalize_gcn_edges(
-        train_edge_index, num_nodes, train_edge_weight
-    )
+    if norm_type == "row":
+        train_edge_index, train_edge_weight = _normalize_row_edges(
+            train_edge_index, num_nodes, train_edge_weight
+        )
+    else:
+        train_edge_index, train_edge_weight = _normalize_gcn_edges(
+            train_edge_index, num_nodes, train_edge_weight
+        )
     return train_edge_index, train_edge_weight
 
 
@@ -154,6 +307,9 @@ def preprocess_graph(
     directed: Optional[bool] = False,
     permute_strategy: str = "auto",
     build_train_adj: Optional[bool] = True,
+    force_no_undirected: bool = False,
+    force_undirected: bool = False,
+    norm_type: str = "symmetric",
 ):
     """
     Function to take the raw graph data and preprocess it
@@ -194,7 +350,8 @@ def preprocess_graph(
             root=input_dir,
         )
     elif name == "papers":
-        directed = True
+        if not force_undirected:
+            directed = True
         dataset = _load_ogb_dataset_compat(
             name="ogbn-papers100M",
             root=input_dir,
@@ -210,77 +367,90 @@ def preprocess_graph(
         # input_dir is actually path for .pt file
         unsupervised = True
         dataset = [torch.load(input_dir, weights_only=False)]
+    elif name in ("mag_coarse", "mag_fine"):
+        # MAG-Scholar: already undirected, sparse BoW features reduced via SVD
+        variant = "coarse" if "coarse" in name else "fine"
+        data, num_classes = _load_mag_scholar(input_dir, variant)
+        dataset = None
     else:
         raise Exception(name + " dataset not supported")
 
     print("Read the original dataset.\n")
 
-    split_idx = None
-    if not unsupervised and hasattr(dataset, "get_idx_split"):
-        try:
-            split_idx = dataset.get_idx_split()
-        except Exception:
-            split_idx = None
+    if dataset is not None:
+        # Standard dataset extraction path
+        split_idx = None
+        if not unsupervised and hasattr(dataset, "get_idx_split"):
+            try:
+                split_idx = dataset.get_idx_split()
+            except Exception:
+                split_idx = None
 
-    # get the relevant parts of the dataset and discard the rest
-    data = dataset[0]
-    if name == "arxiv" or name == "ogbn-arxiv":
-        # Align arxiv preprocessing with the tunedGNN reference:
-        # make the graph undirected, then enforce a single self-loop per node.
-        edge_index = to_undirected(data.edge_index, num_nodes=data.num_nodes)
-        edge_index, _ = remove_self_loops(edge_index)
-        edge_index, _ = add_self_loops(edge_index, num_nodes=data.num_nodes)
-        data.edge_index = edge_index
-
-    if directed:
-        # Convert once to incoming-message orientation before any normalization.
-        data.edge_index = data.edge_index.flip(0)
-
-    if name == "proteins" or name == "ogbn-proteins":
-        # OGBN-Proteins provides edge features; following OGB baselines,
-        # compute node features by averaging incident edge features.
-        data.x = scatter(
-            data.edge_attr,
-            data.edge_index[0],
-            dim=0,
-            dim_size=data.num_nodes,
-            reduce="mean",
+        # get the relevant parts of the dataset and discard the rest
+        data = dataset[0]
+        # Decide whether to make the graph undirected:
+        #  - arxiv: undirected by default (tunedGNN reference), unless --no_undirected
+        #  - any dataset: forced undirected via --force_undirected
+        _do_undirected = force_undirected or (
+            (name == "arxiv" or name == "ogbn-arxiv") and not force_no_undirected
         )
-        data = T.NormalizeFeatures().forward(data)
-        try:
-            delattr(data, "edge_attr")
-        except Exception:
-            pass
+        if _do_undirected:
+            print(f"Converting {name} to undirected graph...")
+            edge_index = to_undirected(data.edge_index, num_nodes=data.num_nodes)
+            edge_index, _ = remove_self_loops(edge_index)
+            edge_index, _ = add_self_loops(edge_index, num_nodes=data.num_nodes)
+            data.edge_index = edge_index
+            print(f"Undirected graph: {edge_index.size(1)} edges (incl. self-loops)")
 
-        # ogbn-proteins is a 112-task multi-label problem.
-        num_classes = int(data.y.size(-1))
-    elif not unsupervised:
-        num_classes = dataset.num_classes
+        if directed:
+            # Convert once to incoming-message orientation before any normalization.
+            data.edge_index = data.edge_index.flip(0)
 
-    del dataset
-    gc.collect()
+        if name == "proteins" or name == "ogbn-proteins":
+            # OGBN-Proteins provides edge features; following OGB baselines,
+            # compute node features by averaging incident edge features.
+            data.x = scatter(
+                data.edge_attr,
+                data.edge_index[0],
+                dim=0,
+                dim_size=data.num_nodes,
+                reduce="mean",
+            )
+            data = T.NormalizeFeatures().forward(data)
+            try:
+                delattr(data, "edge_attr")
+            except Exception:
+                pass
 
-    if split_idx is not None and not hasattr(data, "train_mask"):
-        num_nodes = int(getattr(data, "num_nodes", data.x.shape[0]))
-        train_mask = torch.zeros(num_nodes, dtype=torch.bool)
-        val_mask = torch.zeros(num_nodes, dtype=torch.bool)
-        test_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            # ogbn-proteins is a 112-task multi-label problem.
+            num_classes = int(data.y.size(-1))
+        elif not unsupervised:
+            num_classes = dataset.num_classes
 
-        train_idx = torch.as_tensor(split_idx.get("train", []), dtype=torch.long).view(-1)
-        valid_key = "valid" if "valid" in split_idx else "val"
-        val_idx = torch.as_tensor(split_idx.get(valid_key, []), dtype=torch.long).view(-1)
-        test_idx = torch.as_tensor(split_idx.get("test", []), dtype=torch.long).view(-1)
+        del dataset
+        gc.collect()
 
-        if train_idx.numel():
-            train_mask[train_idx] = True
-        if val_idx.numel():
-            val_mask[val_idx] = True
-        if test_idx.numel():
-            test_mask[test_idx] = True
+        if split_idx is not None and not hasattr(data, "train_mask"):
+            num_nodes = int(getattr(data, "num_nodes", data.x.shape[0]))
+            train_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            val_mask = torch.zeros(num_nodes, dtype=torch.bool)
+            test_mask = torch.zeros(num_nodes, dtype=torch.bool)
 
-        data.train_mask = train_mask
-        data.val_mask = val_mask
-        data.test_mask = test_mask
+            train_idx = torch.as_tensor(split_idx.get("train", []), dtype=torch.long).view(-1)
+            valid_key = "valid" if "valid" in split_idx else "val"
+            val_idx = torch.as_tensor(split_idx.get(valid_key, []), dtype=torch.long).view(-1)
+            test_idx = torch.as_tensor(split_idx.get("test", []), dtype=torch.long).view(-1)
+
+            if train_idx.numel():
+                train_mask[train_idx] = True
+            if val_idx.numel():
+                val_mask[val_idx] = True
+            if test_idx.numel():
+                test_mask[test_idx] = True
+
+            data.train_mask = train_mask
+            data.val_mask = val_mask
+            data.test_mask = test_mask
 
     if unsupervised:
         data.x = torch.rand(data.num_nodes, num_features)
@@ -291,7 +461,7 @@ def preprocess_graph(
     edge_weight_raw = getattr(data, "edge_weight", None)
 
     # normalize the adjacency matrix
-    data = T.GCNNorm().forward(data)
+    data = _apply_normalization(data, norm_type)
     gc.collect()
 
     train_edge_index = None
@@ -304,6 +474,7 @@ def preprocess_graph(
                 edge_weight_raw,
                 train_mask,
                 data.num_nodes,
+                norm_type=norm_type,
             )
         else:
             row = edge_index_raw[0]
@@ -319,7 +490,7 @@ def preprocess_graph(
             train_data = Data(edge_index=train_edge_index_raw, num_nodes=data.num_nodes)
             if train_edge_weight_raw is not None:
                 train_data.edge_weight = train_edge_weight_raw
-            train_data = T.GCNNorm().forward(train_data)
+            train_data = _apply_normalization(train_data, norm_type)
             train_edge_index = train_data.edge_index
             train_edge_weight = train_data.edge_weight
             del train_data

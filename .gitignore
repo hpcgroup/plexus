@@ -3,4 +3,11 @@
 *.out
 *.txt
 *.pyc
+ana/
+fig/
+result/
+traces/
 __pycache__/
+logs/
+data/
+dataset/

@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: MIT
 
 import math
+from typing import Any, Optional, Tuple
 import torch
 from axonn import axonn as ax
 from torch.nn import Parameter
@@ -11,7 +12,7 @@ import torch.nn.functional as F
 from plexus import plexus as plx
 import torch.distributed as dist
 from plexus.utils.matmul_tuning import tuned_matmul
-from plexus.utils.general import pad_dimension, get_process_groups_info
+from plexus.utils.general import pad_dimension, get_process_groups_info, _log_collective_message_size
 from axonn.intra_layer.communication import (
     _gather,
     _all_reduce,
@@ -20,6 +21,102 @@ from axonn.intra_layer.communication import (
 from axonn.intra_layer.fully_connected import (
     extract_local_params_from_full_params,
 )
+
+_BWD_AR_STREAMS = {}
+_LOWP_AR_CAST_BUFS = {}
+
+
+def _get_bwd_allreduce_stream(device: torch.device) -> torch.cuda.Stream:
+    device_index = device.index
+    if device_index is None:
+        device_index = torch.cuda.current_device()
+    stream = _BWD_AR_STREAMS.get(device_index)
+    if stream is None:
+        stream = torch.cuda.Stream(device=device_index)
+        _BWD_AR_STREAMS[device_index] = stream
+    return stream
+
+
+def _get_lowp_cast_buffer(
+    tensor: torch.Tensor,
+    comm_dtype: torch.dtype,
+) -> torch.Tensor:
+    device_index = tensor.device.index
+    if device_index is None:
+        device_index = torch.cuda.current_device()
+    key = (device_index, comm_dtype)
+    needed_numel = tensor.numel()
+    buf = _LOWP_AR_CAST_BUFS.get(key)
+    if buf is None or buf.numel() < needed_numel:
+        buf = torch.empty(needed_numel, device=tensor.device, dtype=comm_dtype)
+        _LOWP_AR_CAST_BUFS[key] = buf
+    return buf[:needed_numel]
+
+
+def _lowp_comm_dtype() -> torch.dtype:
+    return torch.float16 if plx.lowp_allreduce_dtype == "fp16" else torch.bfloat16
+
+
+def _should_use_lowp_allreduce(tensor: torch.Tensor, enable_lowp: bool) -> bool:
+    if not enable_lowp or not plx.lowp_allreduce:
+        return False
+    if not dist.is_initialized():
+        return False
+    return tensor.is_cuda and tensor.is_floating_point()
+
+
+def _all_reduce_with_optional_lowp(
+    tensor: torch.Tensor,
+    process_group: Any,
+    enable_lowp: bool = False,
+) -> None:
+    if not _should_use_lowp_allreduce(tensor, enable_lowp):
+        _all_reduce(tensor, process_group)
+        return
+
+    comm_dtype = _lowp_comm_dtype()
+    ax.get_timers().start("allreduce lowp comm dtype")
+    if tensor.dtype == comm_dtype:
+        reduce_buf = tensor
+    else:
+        cast_buf = _get_lowp_cast_buffer(tensor, comm_dtype)
+        cast_buf.copy_(tensor.reshape(-1))
+        reduce_buf = cast_buf.view_as(tensor)
+    ax.get_timers().stop("allreduce lowp comm dtype")
+    ax.get_timers().start("allreduce lowp")
+    dist.all_reduce(reduce_buf, group=process_group)
+    ax.get_timers().stop("allreduce lowp")
+    if reduce_buf is not tensor:
+        ax.get_timers().start("allreduce copy back")
+        tensor.copy_(reduce_buf)
+        ax.get_timers().stop("allreduce copy back")
+
+
+def _all_reduce_async_with_optional_lowp(
+    tensor: torch.Tensor,
+    process_group: Any,
+    enable_lowp: bool = False,
+) -> Tuple[Optional[Any], torch.Tensor]:
+    if not dist.is_initialized():
+        _all_reduce(tensor, process_group)
+        return None, tensor
+
+    if _should_use_lowp_allreduce(tensor, enable_lowp):
+        comm_dtype = _lowp_comm_dtype()
+        reduce_buf = tensor if tensor.dtype == comm_dtype else tensor.to(dtype=comm_dtype)
+        work = dist.all_reduce(reduce_buf, group=process_group, async_op=True)
+        return work, reduce_buf
+
+    work = dist.all_reduce(tensor, group=process_group, async_op=True)
+    return work, tensor
+
+
+def _copy_back_if_needed(
+    original: torch.Tensor,
+    reduced: torch.Tensor,
+) -> None:
+    if reduced is not original:
+        original.copy_(reduced)
 
 
 def extract_csr_submatrix(csr_matrix, start_row, end_row):
@@ -174,7 +271,10 @@ class GCNConvFunction(torch.autograd.Function):
 
         # gather features if sharded
         if gather_features:
+            ax.get_timers().start("Allgather F")
+            _log_collective_message_size("allgather", x, "F", all_gather_group)
             H = _gather(x, dim=0, process_group=all_gather_group)
+            ax.get_timers().stop("Allgather F")
             H = H.reshape(local_features_shape)
         else:
             H = x
@@ -187,11 +287,17 @@ class GCNConvFunction(torch.autograd.Function):
             ax.get_timers().start("AGG = A * H")
             AGG = torch.sparse.mm(edge_index, H)
             ax.get_timers().stop("AGG = A * H")
+            # TODO "AGG"
+            # _log_collective_message_size("all_reduce", AGG, "AGG", aggregation_all_reduce_group)
+            ax.get_timers().start("allreduce H")
+            _all_reduce_with_optional_lowp(
+                AGG, aggregation_all_reduce_group, enable_lowp=True
+            )
+            ax.get_timers().stop("allreduce H")
 
-            _all_reduce(AGG, aggregation_all_reduce_group)
-
-        # save AGG = A*H, weight, and adj matrix for backward pass
-        ctx.save_for_backward(AGG, weight, edge_index_t)
+        # save tensors for backward pass
+        ctx.use_checkpoint = plx.activation_checkpoint
+        ctx.use_no_adj_t = (edge_index_t is None)
         ctx.backward_depth_group = all_gather_group
         ctx.backward_all_reduce_group = aggregation_all_reduce_group
         ctx.local_weight_shape = local_weight_shape
@@ -199,9 +305,25 @@ class GCNConvFunction(torch.autograd.Function):
         ctx.bwd_reduce_scatter_grad_weights = gather_weights
         ctx.layer_num = layer_num
 
+        if ctx.use_checkpoint:
+            # Save H (pre-spmm features) + A for recomputing AGG in backward
+            if ctx.use_no_adj_t:
+                ctx.save_for_backward(H, weight, edge_index)
+            else:
+                ctx.save_for_backward(H, weight, edge_index, edge_index_t)
+        else:
+            # Original: save AGG directly
+            if ctx.use_no_adj_t:
+                ctx.save_for_backward(AGG, weight, edge_index)
+            else:
+                ctx.save_for_backward(AGG, weight, edge_index_t)
+
         # gather weights - assuming that we always have this matrix sharded
         if gather_weights:
+            ax.get_timers().start("Allgather W")
+            # _log_collective_message_size("allgather", weight, "W", all_gather_group)
             W = _gather(weight, dim=0, process_group=all_gather_group)
+            ax.get_timers().stop("Allgather W")
         else:
             W = weight
         W = W.reshape(local_weight_shape)
@@ -212,7 +334,13 @@ class GCNConvFunction(torch.autograd.Function):
         ax.get_timers().stop("OUT = AGG * W")
 
         # all reduce output of layer
-        _all_reduce(OUT, combination_all_reduce_group)
+        # TODO "OUT"
+        # _log_collective_message_size("all_reduce", OUT, "OUT", combination_all_reduce_group)
+        ax.get_timers().start("allreduce Q")
+        _all_reduce_with_optional_lowp(
+            OUT, combination_all_reduce_group, enable_lowp=True
+        )
+        ax.get_timers().stop("allreduce Q")
 
         ax.get_timers().stop("gcn conv fwd")
 
@@ -222,14 +350,73 @@ class GCNConvFunction(torch.autograd.Function):
     def backward(ctx, grad_output):
         ax.get_timers().start("gcn conv bwd")
 
-        # get agg and weight which are needed for
-        # TODO: implement activation checkpointing
-        agg, weight, adj_t = ctx.saved_tensors
+        # unpack saved tensors — layout depends on optimisation flags
+        saved = ctx.saved_tensors
+
+        if ctx.use_checkpoint:
+            # Recompute AGG = spmm(A, H) + all_reduce
+            H_saved, weight, edge_index = saved[0], saved[1], saved[2]
+            agg = torch.sparse.mm(edge_index, H_saved)
+            _all_reduce_with_optional_lowp(
+                agg, ctx.backward_all_reduce_group, enable_lowp=True
+            )
+            # adj_t: use saved A^T if available, otherwise transpose on the fly
+            if len(saved) > 3:
+                adj_t = saved[3]
+            else:
+                adj_t = edge_index.transpose(0, 1).to_sparse_csr()
+        else:
+            agg = saved[0]
+            weight = saved[1]
+            if ctx.use_no_adj_t:
+                edge_index = saved[2]
+                adj_t = edge_index.transpose(0, 1).to_sparse_csr()
+            else:
+                adj_t = saved[2]
 
         # gather the weights - assume that this matrix is always sharded
         if ctx.bwd_reduce_scatter_grad_weights:
             weight = _gather(weight, dim=0, process_group=ctx.backward_depth_group)
         weight = weight.reshape(ctx.local_weight_shape)
+
+        # calculate gradient with respect to AGG and all-reduce
+        ax.get_timers().start("GRAD_AGG = GRAD_OUT * W.T")
+        grad_agg = tuned_matmul(
+            grad_output, torch.t(weight), "GRAD_OUT * W.T " + str(ctx.layer_num)
+        )
+        ax.get_timers().stop("GRAD_AGG = GRAD_OUT * W.T")
+
+        overlap_bwd_allreduce = (
+            plx.overlap_bwd
+            and dist.is_initialized()
+            and dist.get_world_size(ctx.backward_all_reduce_group) > 1
+        )
+        grad_agg_done_event = None
+        grad_agg_work = None
+        grad_agg_reduced = grad_agg
+        if overlap_bwd_allreduce:
+            compute_stream = torch.cuda.current_stream(device=grad_agg.device)
+            comm_stream = _get_bwd_allreduce_stream(grad_agg.device)
+            grad_agg_ready_event = torch.cuda.Event(blocking=False)
+            grad_agg_done_event = torch.cuda.Event(blocking=False)
+            grad_agg_ready_event.record(compute_stream)
+
+            ax.get_timers().start("all-reduce launch")
+            with torch.cuda.stream(comm_stream):
+                comm_stream.wait_event(grad_agg_ready_event)
+                grad_agg_work, grad_agg_reduced = _all_reduce_async_with_optional_lowp(
+                    grad_agg,
+                    ctx.backward_all_reduce_group,
+                    enable_lowp=True,
+                )
+                grad_agg_done_event.record(comm_stream)
+            ax.get_timers().stop("all-reduce launch")
+        else:
+            # TODO "GRAD_AGG"
+            # _log_collective_message_size("all_reduce", grad_agg, "GRAD_AGG", ctx.backward_all_reduce_group)
+            _all_reduce_with_optional_lowp(
+                grad_agg, ctx.backward_all_reduce_group, enable_lowp=True
+            )
 
         # calculate gradient with respect to weight (AGG.T * GRAD_OUTPUT)
         # and reduce scatter it so they're sharded
@@ -241,24 +428,28 @@ class GCNConvFunction(torch.autograd.Function):
 
         if ctx.bwd_reduce_scatter_grad_weights:
             grad_weight = grad_weight.reshape(-1)
+            ax.get_timers().start("ReduceScatter grad_weight")
             grad_weight = _reduce_scatter(
                 grad_weight,
                 dim=0,
                 process_group=ctx.backward_depth_group,
             )
+            ax.get_timers().stop("ReduceScatter grad_weight")
         else:
             # all-reduce instead of reduce-scatter if weights aren't sharded
-            _all_reduce(grad_weight, process_group=ctx.backward_depth_group)
+            # _all_reduce(grad_weight, ctx.backward_depth_group)
+            _all_reduce_with_optional_lowp(grad_weight, ctx.backward_depth_group, enable_lowp=True)
             grad_weight = grad_weight.reshape(-1)
 
-        # calculate gradient with respect to AGG and all-reduce
-        ax.get_timers().start("GRAD_AGG = GRAD_OUT * W.T")
-        grad_agg = tuned_matmul(
-            grad_output, torch.t(weight), "GRAD_OUT * W.T " + str(ctx.layer_num)
-        )
-        ax.get_timers().stop("GRAD_AGG = GRAD_OUT * W.T")
-
-        _all_reduce(grad_agg, ctx.backward_all_reduce_group)
+        if grad_agg_done_event is not None:
+            ax.get_timers().start("all-reduce")
+            torch.cuda.current_stream(device=grad_agg.device).wait_event(
+                grad_agg_done_event
+            )
+            if grad_agg_work is not None:
+                grad_agg_work.wait()
+            _copy_back_if_needed(grad_agg, grad_agg_reduced)
+            ax.get_timers().stop("all-reduce")
 
         # calculate gradient with respect to features (output of the previous layer)
         ax.get_timers().start("GRAD_H = A.T * GRAD_AGG")
@@ -269,13 +460,22 @@ class GCNConvFunction(torch.autograd.Function):
             # first layer's x is sharded across depth group,
             # so reduce-scatter grad_x
             grad_x = grad_x.reshape(-1)
+            # TODO "GRAD_H"
+            # _log_collective_message_size("reduce_scatter", grad_x, "GRAD_H", ctx.backward_depth_group)
+            ax.get_timers().start("ReduceScatter grad_x")
             grad_x = _reduce_scatter(
                 grad_x, dim=0, process_group=ctx.backward_depth_group
             )
+            ax.get_timers().stop("ReduceScatter grad_x")
         else:
             # x is replicated across depth group after first layer,
             # so all-reduce grad_x
-            _all_reduce(grad_x, ctx.backward_depth_group)
+            ax.get_timers().start("allreduce grad_x")
+            _all_reduce_with_optional_lowp(
+                grad_x, ctx.backward_depth_group, enable_lowp=True
+            )
+            ax.get_timers().stop("allreduce grad_x")
+            # _all_reduce(grad_x, ctx.backward_depth_group)
 
         ax.get_timers().stop("gcn conv bwd")
 
@@ -301,22 +501,37 @@ class GCNConv(torch.nn.Module):
     3D Parallel GCNConv Layer
     """
 
-    def __init__(self, in_channels, out_channels, layer_num, **kwargs):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        layer_num,
+        shard_features_in_depth: bool = True,
+        **kwargs,
+    ):
         super(GCNConv, self).__init__()
 
         self.layer_num = layer_num
 
         # groups is the three process groups in a tuple (outer, inner, depth)
         # H matrix divided by outer and inner, depth is for sharding
-        if layer_num % 3 == 0:
-            groups = ("x", "y", "z")
-        elif layer_num % 3 == 1:
-            groups = ("z", "x", "y")
-        elif layer_num % 3 == 2:
-            groups = ("y", "z", "x")
+        if plx.use_3d_linear:
+            if layer_num % 3 == 0:
+                groups = ("x", "z", "y")
+            elif layer_num % 3 == 1:
+                groups = ("y", "x", "z")
+            elif layer_num % 3 == 2:
+                groups = ("z", "y", "x")
+        else:
+            if layer_num % 3 == 0:
+                groups = ("x", "y", "z")
+            elif layer_num % 3 == 1:
+                groups = ("z", "x", "y")
+            elif layer_num % 3 == 2:
+                groups = ("y", "z", "x")
 
-        # only input features (layer 0) sharded
-        self.gather_features = True if layer_num == 0 else False
+        # only input features (layer 0) sharded when requested
+        self.gather_features = bool(layer_num == 0 and shard_features_in_depth)
 
         num_gpus, _, process_groups = get_process_groups_info(groups)
 
@@ -331,6 +546,7 @@ class GCNConv(torch.nn.Module):
         # initialize full weights matrix
         full_weight = torch.empty(in_channels, out_channels, device="cuda")
         torch.nn.init.kaiming_uniform_(full_weight, a=math.sqrt(5))
+        # torch.nn.init.xavier_uniform_(full_weight)
 
         # shard weights across depth group if possible
         if layer_num == 0:

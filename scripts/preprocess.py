@@ -23,6 +23,10 @@ def parse_args():
                        help='Unsupervised mode (default: False)')
     parser.add_argument('--directed', action='store_true', default=False,
                        help='Directed graph mode (default: False)')
+    parser.add_argument('--build_train_adj', action='store_true', default=True,
+                       help='Precompute train-induced adjacency for --train_adj runs (default: True)')
+    parser.add_argument('--no_build_train_adj', dest='build_train_adj', action='store_false',
+                       help='Disable precomputing train-induced adjacency')
     parser.add_argument('--seed', type=int, default=42,
                        help='Random seed (default: 42)')
     
@@ -36,9 +40,6 @@ def main():
     print(f"Starting preprocessing for {args.name} dataset...")
     print(f"Input directory: {args.input_dir}")
     print(f"Output directory: {args.output_dir}")
-    print(f"Double permutation: {args.double_perm}")
-    print(f"Unsupervised mode: {args.unsupervised}")
-    print(f"Directed graph: {args.directed}")
     
     # Create output directory if it doesn't exist
     if not os.path.exists(args.output_dir):
@@ -51,7 +52,8 @@ def main():
         output_dir=args.output_dir,
         double_perm=args.double_perm,
         unsupervised=args.unsupervised,
-        directed=args.directed
+        directed=args.directed,
+        build_train_adj=args.build_train_adj,
     )
     print("Preprocessing completed!")
 
