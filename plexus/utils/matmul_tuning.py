@@ -43,7 +43,10 @@ def matmul(A, B, change_layout, transpose=False):
     else:
         B = B.contiguous()
 
-    C = torch.mm(A, B)
+    if plx.bf16_gemm:
+        C = torch.mm(A.to(torch.bfloat16), B.to(torch.bfloat16)).to(torch.float32)
+    else:
+        C = torch.mm(A, B)
 
     if transpose:
         C = C.t().contiguous()
@@ -92,6 +95,10 @@ def tuned_matmul(A, B, matmul_name):
     """
 
     if not plx.tune_gemm:
+        if plx.bf16_gemm:
+            orig_dtype = A.dtype
+            result = torch.mm(A.to(torch.bfloat16), B.to(torch.bfloat16))
+            return result.to(orig_dtype)
         return torch.mm(A, B)
 
     if matmul_name in matmul_to_index:

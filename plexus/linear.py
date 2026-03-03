@@ -3,6 +3,7 @@ import torch
 from torch import nn
 from axonn import axonn as ax
 from axonn.intra_layer.communication import Gather
+from plexus import plexus as plx
 from plexus.utils.general import pad_dimension, get_process_groups_info
 
 
@@ -93,7 +94,12 @@ class PlexusLinear(nn.Module):
 
         # gather input features across feature group (row-parallel)
         x_full = Gather.apply(x, self.feature_group, 1)
-        out = x_full.matmul(self.weight.t())
+        if plx.bf16_gemm:
+            out = x_full.to(torch.bfloat16).matmul(
+                self.weight.t().to(torch.bfloat16)
+            ).to(x_full.dtype)
+        else:
+            out = x_full.matmul(self.weight.t())
         if self.bias is not None:
             out = out + self.bias
         return out

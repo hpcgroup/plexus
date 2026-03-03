@@ -170,6 +170,18 @@ def create_parser():
             "across replication dimensions. Useful for detecting gradient sync bugs."
         ),
     )
+    parser.add_argument(
+        "--bf16_spmm",
+        action="store_true",
+        default=False,
+        help="Perform sparse matrix multiplications (SPMM) in BF16.",
+    )
+    parser.add_argument(
+        "--bf16_gemm",
+        action="store_true",
+        default=False,
+        help="Perform dense matrix multiplications (GEMM) in BF16.",
+    )
     return parser
 
 
@@ -853,6 +865,8 @@ if __name__ == "__main__":
         allreduce_low_precision=args.allreduce_lowp,
         allreduce_low_precision_dtype=args.allreduce_lowp_dtype,
         G_data=args.G_data,
+        bf16_spmm_flag=args.bf16_spmm,
+        bf16_gemm_flag=args.bf16_gemm,
     )
     dp_rank = ax.comm_handle.data_parallel_rank
 

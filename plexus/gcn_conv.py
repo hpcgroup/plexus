@@ -22,6 +22,16 @@ from axonn.intra_layer.fully_connected import (
     extract_local_params_from_full_params,
 )
 
+def _spmm(sparse_mat: torch.Tensor, dense_mat: torch.Tensor) -> torch.Tensor:
+    """Sparse-dense matmul with optional BF16 casting."""
+    if plx.bf16_spmm:
+        result = torch.sparse.mm(
+            sparse_mat.to(torch.bfloat16), dense_mat.to(torch.bfloat16)
+        )
+        return result.to(torch.float32)
+    return torch.sparse.mm(sparse_mat, dense_mat)
+
+
 _BWD_AR_STREAMS = {}
 _LOWP_AR_CAST_BUFS = {}
 
@@ -192,7 +202,7 @@ def chunked_spmm_all_reduce(csr_matrix, H, ar_group):
         if not plx.overlap_agg:
             ax.get_timers().start("AGG = A * H")
 
-        results[i] = torch.sparse.mm(chunk_edge_index, H)
+        results[i] = _spmm(chunk_edge_index, H)
 
         if not plx.overlap_agg:
             ax.get_timers().stop("AGG = A * H")
@@ -285,7 +295,7 @@ class GCNConvFunction(torch.autograd.Function):
             AGG = chunked_spmm_all_reduce(edge_index, H, aggregation_all_reduce_group)
         else:
             ax.get_timers().start("AGG = A * H")
-            AGG = torch.sparse.mm(edge_index, H)
+            AGG = _spmm(edge_index, H)
             ax.get_timers().stop("AGG = A * H")
             # TODO "AGG"
             # _log_collective_message_size("all_reduce", AGG, "AGG", aggregation_all_reduce_group)
@@ -356,7 +366,7 @@ class GCNConvFunction(torch.autograd.Function):
         if ctx.use_checkpoint:
             # Recompute AGG = spmm(A, H) + all_reduce
             H_saved, weight, edge_index = saved[0], saved[1], saved[2]
-            agg = torch.sparse.mm(edge_index, H_saved)
+            agg = _spmm(edge_index, H_saved)
             _all_reduce_with_optional_lowp(
                 agg, ctx.backward_all_reduce_group, enable_lowp=True
             )
@@ -453,7 +463,7 @@ class GCNConvFunction(torch.autograd.Function):
 
         # calculate gradient with respect to features (output of the previous layer)
         ax.get_timers().start("GRAD_H = A.T * GRAD_AGG")
-        grad_x = torch.sparse.mm(adj_t, grad_agg)
+        grad_x = _spmm(adj_t, grad_agg)
         ax.get_timers().stop("GRAD_H = A.T * GRAD_AGG")
 
         if ctx.bwd_reduce_scatter_grad_x:

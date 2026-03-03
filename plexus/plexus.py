@@ -12,6 +12,8 @@ activation_checkpoint = False
 no_adj_transpose = False
 int32_indices = False
 bf16_activations = False
+bf16_spmm = False
+bf16_gemm = False
 
 
 def init(
@@ -32,6 +34,8 @@ def init(
     no_adj_transpose_flag: bool = False,
     int32_csr_indices: bool = False,
     bf16_activations_flag: bool = False,
+    bf16_spmm_flag: bool = False,
+    bf16_gemm_flag: bool = False,
 ) -> None:
     """
     Initialize Plexus' 3D parallelism (optionally with data parallelism).
@@ -63,6 +67,12 @@ def init(
         bf16_activations_flag (bool): store dense activations saved for backward
         in BF16 instead of FP32.  Halves activation memory at the cost of
         slight numerical precision loss in gradients.
+        bf16_spmm_flag (bool): perform sparse matrix multiplications (SPMM)
+        in BF16.  Inputs are cast to BF16 before torch.sparse.mm and the
+        result is cast back to FP32.
+        bf16_gemm_flag (bool): perform dense matrix multiplications (GEMM)
+        in BF16.  Inputs are cast to BF16 before torch.mm and the result
+        is cast back to FP32.
     """
 
     # overlap_aggregation can only be used with block_aggregation
@@ -81,6 +91,7 @@ def init(
     global block_agg, overlap_agg, overlap_bwd, tune_gemm
     global use_3d_linear, lowp_allreduce, lowp_allreduce_dtype
     global activation_checkpoint, no_adj_transpose, int32_indices, bf16_activations
+    global bf16_spmm, bf16_gemm
     block_agg, overlap_agg, overlap_bwd, tune_gemm = (
         block_aggregation,
         overlap_aggregation,
@@ -99,3 +110,5 @@ def init(
     no_adj_transpose = bool(no_adj_transpose_flag)
     int32_indices = bool(int32_csr_indices)
     bf16_activations = bool(bf16_activations_flag)
+    bf16_spmm = bool(bf16_spmm_flag)
+    bf16_gemm = bool(bf16_gemm_flag)
