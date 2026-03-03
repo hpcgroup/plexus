@@ -1,5 +1,7 @@
 import torch
 from torch import nn
+from axonn import axonn as ax
+import torch.distributed as dist
 from axonn.intra_layer.communication import ForwardAllReduce
 from plexus.utils.general import pad_dimension, get_process_groups_info
 from axonn.intra_layer.communication import _all_reduce
@@ -13,12 +15,45 @@ class PlexusRMSNorm(nn.Module):
     all-reducing the local mean of squared activations.
     """
 
-    def __init__(self, size: int, feature_group: str, eps: float = 1e-6) -> None:
+    def __init__(
+        self,
+        size: int,
+        feature_group: str,
+        data_group: str | None = None,
+        inner_group: str | None = None,
+        eps: float = 1e-6,
+    ) -> None:
         super().__init__()
         num_gpus, _, process_groups = get_process_groups_info((feature_group,))
         self.feature_group = process_groups[0]
         self.feature_group_size = num_gpus[0]
         self.eps = eps
+
+        # Data-dimension group: the group across which the node/data
+        # dimension of this norm's input is partitioned (the layer's
+        # depth group).  Used by sync_norm_gradients().
+        if data_group is not None:
+            dg_gpus, _, dg_pgs = get_process_groups_info((data_group,))
+            self.data_group = dg_pgs[0]
+            self.data_group_size = dg_gpus[0]
+            self.data_group_letter = data_group
+        else:
+            self.data_group = None
+            self.data_group_size = 1
+            self.data_group_letter = None
+
+        # Inner group: the group across which the norm input is
+        # replicated (after the GCN combination all-reduce).
+        # Used by check_norm_weight_consistency().
+        if inner_group is not None:
+            ig_gpus, _, ig_pgs = get_process_groups_info((inner_group,))
+            self.inner_group = ig_pgs[0]
+            self.inner_group_size = ig_gpus[0]
+            self.inner_group_letter = inner_group
+        else:
+            self.inner_group = None
+            self.inner_group_size = 1
+            self.inner_group_letter = None
 
         self.global_size = size
         self.local_size = (
@@ -45,3 +80,86 @@ class PlexusRMSNorm(nn.Module):
             norm = norm / self.feature_group_size
         x_normed = x_float * torch.rsqrt(norm + self.eps)
         return (x_normed * self.weight.float()).to(dtype=dtype)
+
+
+def sync_norm_gradients(norms, mean: bool = True) -> None:
+    """All-reduce norm weight gradients across each norm's data group.
+
+    The output of GCN layer *i* has its data (node) dimension partitioned
+    across the depth group.  The norm weight gradient is therefore a partial
+    sum over local nodes and must be combined across this group before the
+    optimizer step.
+    """
+    if not dist.is_initialized():
+        return
+    for norm in norms:
+        if norm.weight.grad is None:
+            continue
+        if norm.data_group is None:
+            continue
+        depth_world = norm.data_group_size
+        if depth_world <= 1:
+            continue
+        dist.all_reduce(norm.weight.grad, group=norm.data_group)
+        if mean:
+            norm.weight.grad.div_(depth_world)
+
+
+def check_norm_weight_consistency(norms) -> None:
+    """Verify that norm weights are identical across replication dimensions.
+
+    For each norm layer the weight is sharded across the outer (feature)
+    group, but should be identical across the inner group and the depth
+    group (and data-parallel replicas).  Any divergence indicates a
+    gradient synchronisation bug.
+    """
+    for i, norm in enumerate(norms):
+        w = norm.weight.data.clone()
+
+        # Check across the data group (depth / data-dimension group).
+        if norm.data_group is not None and norm.data_group_size > 1:
+            w_ref = w.clone()
+            dist.broadcast(
+                w_ref,
+                src=dist.get_process_group_ranks(norm.data_group)[0],
+                group=norm.data_group,
+            )
+            if not torch.allclose(w, w_ref, atol=1e-6):
+                diff = (w - w_ref).abs().max().item()
+                print(
+                    f"[TEST FAIL] Rank {dist.get_rank()}: norm[{i}] weight "
+                    f"diverged across data group '{norm.data_group_letter}', "
+                    f"max diff = {diff}"
+                )
+
+        # Check across the inner group (should be replicated).
+        if norm.inner_group is not None and norm.inner_group_size > 1:
+            w_ref2 = w.clone()
+            dist.broadcast(
+                w_ref2,
+                src=dist.get_process_group_ranks(norm.inner_group)[0],
+                group=norm.inner_group,
+            )
+            if not torch.allclose(w, w_ref2, atol=1e-6):
+                diff = (w - w_ref2).abs().max().item()
+                print(
+                    f"[TEST FAIL] Rank {dist.get_rank()}: norm[{i}] weight "
+                    f"diverged across inner group '{norm.inner_group_letter}', "
+                    f"max diff = {diff}"
+                )
+
+        # Check across the data-parallel group.
+        dp_group = ax.comm_handle.data_parallel_group
+        if dp_group is not None and dist.get_world_size(dp_group) > 1:
+            w_ref3 = w.clone()
+            dist.broadcast(
+                w_ref3,
+                src=dist.get_process_group_ranks(dp_group)[0],
+                group=dp_group,
+            )
+            if not torch.allclose(w, w_ref3, atol=1e-6):
+                diff = (w - w_ref3).abs().max().item()
+                print(
+                    f"[TEST FAIL] Rank {dist.get_rank()}: norm[{i}] weight "
+                    f"diverged across data-parallel group, max diff = {diff}"
+                )

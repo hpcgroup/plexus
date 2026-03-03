@@ -17,7 +17,7 @@ import torch.distributed as dist
 from plexus.gcn_conv import GCNConv
 from plexus.linear import PlexusLinear
 from plexus.linear_3d import Plexus3DLinear
-from plexus.norm import PlexusRMSNorm
+from plexus.norm import PlexusRMSNorm, sync_norm_gradients, check_norm_weight_consistency
 from plexus.utils.dataloader import DataLoader
 from plexus.cross_entropy import parallel_cross_entropy, parallel_bce_with_logits
 from plexus.utils.general import set_seed, print_axonn_timer_data, get_process_groups_info
@@ -161,6 +161,15 @@ def create_parser():
             "training."
         ),
     )
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        default=False,
+        help=(
+            "After every optimizer step, verify that norm weights are identical "
+            "across replication dimensions. Useful for detecting gradient sync bugs."
+        ),
+    )
     return parser
 
 
@@ -221,7 +230,13 @@ class Net(torch.nn.Module):
                 
         for i in range(self.num_gcn_layers):
             self.layers.append(GCNConv(hidden_size, hidden_size, i, shard_features_in_depth=False))
-            self.norms.append(PlexusRMSNorm(hidden_size, feature_group=_outer_group_letter(i)))
+            _, inner_g, depth_g = _layer_groups(i)
+            self.norms.append(PlexusRMSNorm(
+                hidden_size,
+                feature_group=_outer_group_letter(i),
+                data_group=depth_g,
+                inner_group=inner_g,
+            ))
 
         if plx.use_3d_linear:
             # Post-linear: hidden -> classes (row=node_group, k=last_outer, col=class_group)
@@ -297,6 +312,7 @@ def train(
     train_mask,
     num_nodes,
     num_classes,
+    test: bool = False,
 ):
     # set to training mode
     model.train()
@@ -330,10 +346,14 @@ def train(
 
     # backward pass
     loss.backward()
+    sync_norm_gradients(model.norms)
     _sync_data_parallel_gradients(optimizer)
 
     # update weights
     optimizer.step()
+
+    if test:
+        check_norm_weight_consistency(model.norms)
 
     return loss
 
@@ -1094,6 +1114,7 @@ if __name__ == "__main__":
                     mask_to_use,
                     num_nodes_loss,
                     num_classes,
+                    test=args.test,
                 )
             ax.get_timers().stop("train step")
             epoch_loss += float(loss.detach().item())
@@ -1155,6 +1176,8 @@ if __name__ == "__main__":
                         else:
                             best_valid.add(train_m["acc"], val_m["acc"], test_m["acc"])
 
+    print(f"rank {rank} Peak GPU memory: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
+    
     if prefetch_executor is not None:
         prefetch_executor.shutdown(wait=True)
     
