@@ -14,6 +14,7 @@ int32_indices = False
 bf16_activations = False
 bf16_spmm = False
 bf16_gemm = False
+avg_grad = False
 
 
 def init(
@@ -36,6 +37,7 @@ def init(
     bf16_activations_flag: bool = False,
     bf16_spmm_flag: bool = False,
     bf16_gemm_flag: bool = False,
+    avg_grad_flag: bool = False,
 ) -> None:
     """
     Initialize Plexus' 3D parallelism (optionally with data parallelism).
@@ -73,6 +75,8 @@ def init(
         bf16_gemm_flag (bool): perform dense matrix multiplications (GEMM)
         in BF16.  Inputs are cast to BF16 before torch.mm and the result
         is cast back to FP32.
+        avg_grad_flag (bool): average (instead of sum) replicated-parameter
+        gradients across their replication dimension during backward.
     """
 
     # overlap_aggregation can only be used with block_aggregation
@@ -91,7 +95,7 @@ def init(
     global block_agg, overlap_agg, overlap_bwd, tune_gemm
     global use_3d_linear, lowp_allreduce, lowp_allreduce_dtype
     global activation_checkpoint, no_adj_transpose, int32_indices, bf16_activations
-    global bf16_spmm, bf16_gemm
+    global bf16_spmm, bf16_gemm, avg_grad
     block_agg, overlap_agg, overlap_bwd, tune_gemm = (
         block_aggregation,
         overlap_aggregation,
@@ -112,3 +116,4 @@ def init(
     bf16_activations = bool(bf16_activations_flag)
     bf16_spmm = bool(bf16_spmm_flag)
     bf16_gemm = bool(bf16_gemm_flag)
+    avg_grad = bool(avg_grad_flag)

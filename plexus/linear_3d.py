@@ -1,8 +1,10 @@
 import math
 import torch
 from torch import nn
+import torch.distributed as dist
 from axonn import axonn as ax
 from axonn.intra_layer.communication import Gather, _all_reduce
+from plexus import plexus as plx
 from plexus.utils.general import pad_dimension, get_process_groups_info
 from plexus.utils.matmul_tuning import tuned_matmul
 
@@ -47,10 +49,18 @@ class Plexus3DLinearFunction(torch.autograd.Function):
                 grad_output.t(), x, ctx.matmul_name + " GRAD_W"
             )
             _all_reduce(grad_weight, ctx.row_group)
+            if plx.avg_grad:
+                row_world = dist.get_world_size(ctx.row_group)
+                if row_world > 1:
+                    grad_weight.div_(row_world)
 
         if ctx.has_bias and ctx.needs_input_grad[2]:
             grad_bias = grad_output.sum(dim=0)
             _all_reduce(grad_bias, ctx.row_group)
+            if plx.avg_grad:
+                row_world = dist.get_world_size(ctx.row_group)
+                if row_world > 1:
+                    grad_bias.div_(row_world)
 
         return grad_x, grad_weight, grad_bias, None, None, None, None
 

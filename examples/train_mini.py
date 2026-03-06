@@ -182,6 +182,15 @@ def create_parser():
         default=False,
         help="Perform dense matrix multiplications (GEMM) in BF16.",
     )
+    parser.add_argument(
+        "--avg_grad",
+        action="store_true",
+        default=False,
+        help=(
+            "Average (instead of sum) replicated-parameter gradients across "
+            "their replication dimension."
+        ),
+    )
     return parser
 
 
@@ -358,7 +367,7 @@ def train(
 
     # backward pass
     loss.backward()
-    sync_norm_gradients(model.norms)
+    sync_norm_gradients(model.norms, mean=plx.avg_grad)
     _sync_data_parallel_gradients(optimizer)
 
     # update weights
@@ -867,6 +876,7 @@ if __name__ == "__main__":
         G_data=args.G_data,
         bf16_spmm_flag=args.bf16_spmm,
         bf16_gemm_flag=args.bf16_gemm,
+        avg_grad_flag=args.avg_grad,
     )
     dp_rank = ax.comm_handle.data_parallel_rank
 

@@ -82,7 +82,7 @@ class PlexusRMSNorm(nn.Module):
         return (x_normed * self.weight.float()).to(dtype=dtype)
 
 
-def sync_norm_gradients(norms, mean: bool = True) -> None:
+def sync_norm_gradients(norms, mean: bool = False) -> None:
     """All-reduce norm weight gradients across each norm's data group.
 
     The output of GCN layer *i* has its data (node) dimension partitioned

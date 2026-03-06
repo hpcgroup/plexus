@@ -25,10 +25,17 @@ from axonn.intra_layer.fully_connected import (
 def _spmm(sparse_mat: torch.Tensor, dense_mat: torch.Tensor) -> torch.Tensor:
     """Sparse-dense matmul with optional BF16 casting."""
     if plx.bf16_spmm:
-        result = torch.sparse.mm(
-            sparse_mat.to(torch.bfloat16), dense_mat.to(torch.bfloat16)
-        )
-        return result.to(torch.float32)
+        ax.get_timers().start("convert to bf16")
+        sparse_mat.to(torch.bfloat16)
+        dense_mat.to(torch.bfloat16)
+        ax.get_timers().stop("convert to bf16")
+        ax.get_timers().start("spmm bf16")
+        result = torch.sparse.mm(sparse_mat, dense_mat)
+        ax.get_timers().stop("spmm bf16")
+        ax.get_timers().start("convert to fp32")
+        result = result.to(torch.float32)
+        ax.get_timers().stop("convert to fp32")
+        return result
     return torch.sparse.mm(sparse_mat, dense_mat)
 
 
@@ -449,6 +456,10 @@ class GCNConvFunction(torch.autograd.Function):
             # all-reduce instead of reduce-scatter if weights aren't sharded
             # _all_reduce(grad_weight, ctx.backward_depth_group)
             _all_reduce_with_optional_lowp(grad_weight, ctx.backward_depth_group, enable_lowp=True)
+            if plx.avg_grad:
+                depth_world = dist.get_world_size(ctx.backward_depth_group)
+                if depth_world > 1:
+                    grad_weight.div_(depth_world)
             grad_weight = grad_weight.reshape(-1)
 
         if grad_agg_done_event is not None:

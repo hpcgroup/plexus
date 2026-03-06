@@ -7,6 +7,7 @@ import time
 import torch
 from functools import partial
 from plexus import plexus as plx
+from axonn import axonn as ax
 
 
 # helper function to time a GPU operation
@@ -97,8 +98,17 @@ def tuned_matmul(A, B, matmul_name):
     if not plx.tune_gemm:
         if plx.bf16_gemm:
             orig_dtype = A.dtype
-            result = torch.mm(A.to(torch.bfloat16), B.to(torch.bfloat16))
-            return result.to(orig_dtype)
+            ax.get_timers().start("convert to bf16")
+            A = A.to(torch.bfloat16)
+            B = B.to(torch.bfloat16)
+            ax.get_timers().stop("convert to bf16")
+            ax.get_timers().start("gemm bf16")
+            result = torch.mm(A, B)
+            ax.get_timers().stop("gemm bf16")
+            ax.get_timers().start("convert to fp32")
+            result = result.to(orig_dtype)
+            ax.get_timers().stop("convert to fp32")
+            return result
         return torch.mm(A, B)
 
     if matmul_name in matmul_to_index:
