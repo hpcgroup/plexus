@@ -174,7 +174,7 @@ class DataLoader:
             // self.num_partitions_dim
         )
 
-        merged_indices = torch.empty((2, 0))
+        merged_indices = torch.empty((2, 0), dtype=torch.int64)
         merged_values = torch.empty(0)
 
         layer_idx = layer_num % 3
