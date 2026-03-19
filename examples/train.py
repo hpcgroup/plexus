@@ -82,6 +82,9 @@ def create_parser():
         help="Use INT32 CSR indices instead of INT64 (valid when N < 2^31).")
     parser.add_argument("--bf16_activations", action="store_true", default=False,
         help="Store saved-for-backward activations in BF16 instead of FP32 (halves activation memory).")
+    parser.add_argument("--multilabel_metric", type=str, default="rocauc",
+        choices=["rocauc", "f1_micro"],
+        help="Metric for multi-label evaluation: rocauc (default, for ogbn-proteins) or f1_micro (for yelp).")
     return parser
 
 
@@ -198,12 +201,14 @@ class Net(torch.nn.Module):
         ax.get_timers().stop("input_linear")
         
         for i in range(self.num_gcn_layers):
-            
+            residual = x
             x = self.layers[i](x, edge_index_shards)
             
             ax.get_timers().start("activation")
             x = self.norms[i](x)
             x = F.relu(x)
+            x = F.dropout(x, p=0.3, training=self.training)
+            # x = x + _reshard_residual(residual, i)
             ax.get_timers().stop("activation")
             
         ax.get_timers().start("output_linear")
@@ -449,7 +454,16 @@ def _compute_split_metrics(pred, labels, mask, num_classes, node_group):
 
 
 @torch.no_grad()
-def evaluate(model, features_local, adj_shards, labels, masks, num_nodes, num_classes):
+def evaluate(
+    model,
+    features_local,
+    adj_shards,
+    labels,
+    masks,
+    num_nodes,
+    num_classes,
+    multilabel_metric="rocauc",
+):
     groups = _loss_groups(model.num_gcn_layers)
     _, _, process_groups = get_process_groups_info(groups)
     node_group = process_groups[0]
@@ -458,18 +472,10 @@ def evaluate(model, features_local, adj_shards, labels, masks, num_nodes, num_cl
     model.eval()
     logits = model(features_local, adj_shards)
 
-    # Multi-label (e.g., ogbn-proteins): gather logits across class+node groups and
-    # evaluate ROC-AUC using OGB Evaluator (rank 0 reports).
+    # Multi-label (e.g., ogbn-proteins, yelp): gather logits across class+node groups.
     if labels.ndim == 2 and labels.size(-1) > 1:
         if masks is None:
             return {}
-
-        try:
-            from ogb.nodeproppred import Evaluator
-        except Exception as exc:
-            raise RuntimeError(
-                "Failed to import OGB Evaluator (ogb.nodeproppred). Ensure the `ogb` package and its dependencies are installed."
-            ) from exc
 
         # 1) Gather class shards -> full logits for this node shard.
         class_world = dist.get_world_size(group=class_group)
@@ -500,15 +506,41 @@ def evaluate(model, features_local, adj_shards, labels, masks, num_nodes, num_cl
         if dist.get_rank() != 0:
             return {}
 
-        evaluator = Evaluator(name="ogbn-proteins")
-        results = {}
-        for split in ("train", "val", "test"):
-            mask = gathered_masks.get(split)
-            if mask is None:
-                results[split] = None
-                continue
-            results[split] = evaluator.eval({"y_true": y_true[mask], "y_pred": y_pred[mask]})
-        return results
+        if multilabel_metric == "f1_micro":
+            from sklearn.metrics import f1_score
+
+            y_pred_binary = (y_pred > 0).cpu().numpy()
+            y_true_np = y_true.cpu().numpy()
+            results = {}
+            for split in ("train", "val", "test"):
+                mask = gathered_masks.get(split)
+                if mask is None:
+                    results[split] = None
+                    continue
+                mask_np = mask.cpu().numpy()
+                results[split] = {
+                    "f1_micro": f1_score(
+                        y_true_np[mask_np], y_pred_binary[mask_np], average="micro"
+                    )
+                }
+            return results
+        else:
+            try:
+                from ogb.nodeproppred import Evaluator
+            except Exception as exc:
+                raise RuntimeError(
+                    "Failed to import OGB Evaluator (ogb.nodeproppred). Ensure the `ogb` package and its dependencies are installed."
+                ) from exc
+
+            evaluator = Evaluator(name="ogbn-proteins")
+            results = {}
+            for split in ("train", "val", "test"):
+                mask = gathered_masks.get(split)
+                if mask is None:
+                    results[split] = None
+                    continue
+                results[split] = evaluator.eval({"y_true": y_true[mask], "y_pred": y_pred[mask]})
+            return results
 
     pred = _distributed_argmax(logits, model.num_gcn_layers, num_nodes, num_classes)
 
@@ -597,7 +629,7 @@ if __name__ == "__main__":
 
     best_valid = BestValidTracker() if do_eval and dist.get_rank() == 0 else None
     if best_valid is not None and labels.ndim == 2 and labels.size(-1) > 1:
-        best_valid = BestValidTracker(metric_name="rocauc", percent_scale=True)
+        best_valid = BestValidTracker(metric_name=args.multilabel_metric, percent_scale=True)
 
     train_mask = masks.get("train") if masks is not None else None
     if args.train_adj and adj_shards_train is None and dist.get_rank() == 0:
@@ -672,13 +704,15 @@ if __name__ == "__main__":
                 masks,
                 num_nodes,
                 num_classes,
+                multilabel_metric=args.multilabel_metric,
             )
             if dist.get_rank() == 0:
                 for split, m in metrics.items():
                     if m is None:
                         continue
                     if labels.ndim == 2 and labels.size(-1) > 1:
-                        print("{}: rocauc {:.4f}".format(split.upper(), m["rocauc"]))
+                        mk = args.multilabel_metric
+                        print("{}: {} {:.4f}".format(split.upper(), mk, m[mk]))
                     else:
                         print(
                             "{}: acc {:.4f}, f1_micro {:.4f}, f1_macro {:.4f} (n={})".format(
@@ -695,8 +729,9 @@ if __name__ == "__main__":
                     test_m = metrics.get("test")
                     if train_m is not None and val_m is not None and test_m is not None:
                         if labels.ndim == 2 and labels.size(-1) > 1:
+                            mk = args.multilabel_metric
                             best_valid.add(
-                                train_m["rocauc"], val_m["rocauc"], test_m["rocauc"]
+                                train_m[mk], val_m[mk], test_m[mk]
                             )
                         else:
                             best_valid.add(train_m["acc"], val_m["acc"], test_m["acc"])

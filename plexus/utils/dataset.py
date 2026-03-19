@@ -28,6 +28,7 @@ from torch_geometric.data.data import DataEdgeAttr, DataTensorAttr
 from torch_geometric.datasets import (
     Reddit,
     SuiteSparseMatrixCollection,
+    Yelp,
 )
 from torch_geometric.utils import (
     add_self_loops,
@@ -210,6 +211,8 @@ def preprocess_graph(
         # input_dir is actually path for .pt file
         unsupervised = True
         dataset = [torch.load(input_dir, weights_only=False)]
+    elif name == "yelp":
+        dataset = Yelp(root=input_dir)
     else:
         raise Exception(name + " dataset not supported")
 
@@ -229,6 +232,12 @@ def preprocess_graph(
         # make the graph undirected, then enforce a single self-loop per node.
         edge_index = to_undirected(data.edge_index, num_nodes=data.num_nodes)
         edge_index, _ = remove_self_loops(edge_index)
+        edge_index, _ = add_self_loops(edge_index, num_nodes=data.num_nodes)
+        data.edge_index = edge_index
+
+    if name == "yelp":
+        # Enforce exactly one self-loop per node (following BNS-GCN baseline).
+        edge_index, _ = remove_self_loops(data.edge_index)
         edge_index, _ = add_self_loops(edge_index, num_nodes=data.num_nodes)
         data.edge_index = edge_index
 
@@ -253,6 +262,18 @@ def preprocess_graph(
             pass
 
         # ogbn-proteins is a 112-task multi-label problem.
+        num_classes = int(data.y.size(-1))
+    elif name == "yelp":
+        # StandardScaler normalization (fit on training data only),
+        # following the BNS-GCN baseline.
+        from sklearn.preprocessing import StandardScaler
+
+        train_mask_np = data.train_mask.numpy()
+        scaler = StandardScaler()
+        scaler.fit(data.x[train_mask_np].numpy())
+        data.x = torch.tensor(scaler.transform(data.x.numpy()), dtype=torch.float)
+
+        # Yelp is a 100-task multi-label problem.
         num_classes = int(data.y.size(-1))
     elif not unsupervised:
         num_classes = dataset.num_classes

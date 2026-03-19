@@ -15,6 +15,9 @@ bf16_activations = False
 bf16_spmm = False
 bf16_gemm = False
 avg_grad = False
+overlap_fwd_comm = False
+overlap_bwd_comm = False
+overlap_linear_bwd = False
 
 
 def init(
@@ -38,6 +41,9 @@ def init(
     bf16_spmm_flag: bool = False,
     bf16_gemm_flag: bool = False,
     avg_grad_flag: bool = False,
+    overlap_fwd_comm_flag: bool = False,
+    overlap_bwd_comm_flag: bool = False,
+    overlap_linear_bwd_flag: bool = False,
 ) -> None:
     """
     Initialize Plexus' 3D parallelism (optionally with data parallelism).
@@ -77,6 +83,15 @@ def init(
         is cast back to FP32.
         avg_grad_flag (bool): average (instead of sum) replicated-parameter
         gradients across their replication dimension during backward.
+        overlap_fwd_comm_flag (bool): overlap AR(AGG) with Allgather(W) in GCN
+        forward by issuing both as async NCCL ops on different process groups.
+        overlap_bwd_comm_flag (bool): overlap AR(grad_agg) with
+        [GRAD_W compute + RS(grad_W)] in GCN backward by issuing async NCCL
+        ops on different process groups.  Takes priority over overlap_backward.
+        overlap_linear_bwd_flag (bool): overlap AR(grad_x) with AR(grad_W+bias)
+        in Plexus3DLinear backward by issuing async NCCL ops on col_group and
+        row_group simultaneously; also fuses grad_W and grad_bias into a single
+        all-reduce call.
     """
 
     # overlap_aggregation can only be used with block_aggregation
@@ -96,6 +111,7 @@ def init(
     global use_3d_linear, lowp_allreduce, lowp_allreduce_dtype
     global activation_checkpoint, no_adj_transpose, int32_indices, bf16_activations
     global bf16_spmm, bf16_gemm, avg_grad
+    global overlap_fwd_comm, overlap_bwd_comm, overlap_linear_bwd
     block_agg, overlap_agg, overlap_bwd, tune_gemm = (
         block_aggregation,
         overlap_aggregation,
@@ -117,3 +133,6 @@ def init(
     bf16_spmm = bool(bf16_spmm_flag)
     bf16_gemm = bool(bf16_gemm_flag)
     avg_grad = bool(avg_grad_flag)
+    overlap_fwd_comm = bool(overlap_fwd_comm_flag)
+    overlap_bwd_comm = bool(overlap_bwd_comm_flag)
+    overlap_linear_bwd = bool(overlap_linear_bwd_flag)

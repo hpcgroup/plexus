@@ -6,6 +6,22 @@ from axonn.intra_layer.communication import ForwardAllReduce
 from plexus.utils.general import pad_dimension, get_process_groups_info
 from axonn.intra_layer.communication import _all_reduce
 
+
+def _rmsnorm_pre(x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Cast to float32 and compute local mean of squares."""
+    x_float = x.float()
+    norm = (x_float * x_float).mean(dim=-1, keepdim=True)
+    return x_float, norm
+
+
+def _rmsnorm_post(
+    x_float: torch.Tensor, norm: torch.Tensor, weight: torch.Tensor, eps: float, dtype: torch.dtype
+) -> torch.Tensor:
+    """Normalize and scale."""
+    x_normed = x_float * torch.rsqrt(norm + eps)
+    return (x_normed * weight.float()).to(dtype=dtype)
+
+
 class PlexusRMSNorm(nn.Module):
     """
     Tensor-parallel RMSNorm over the feature dimension.
@@ -63,6 +79,14 @@ class PlexusRMSNorm(nn.Module):
             torch.ones(self.local_size, device="cuda"), requires_grad=True
         )
 
+        self._pre = _rmsnorm_pre
+        self._post = _rmsnorm_post
+
+    def compile(self):
+        """Compile the elementwise parts of RMSNorm with torch.compile."""
+        self._pre = torch.compile(_rmsnorm_pre)
+        self._post = torch.compile(_rmsnorm_post)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.ndim != 2:
             raise ValueError(f"PlexusRMSNorm expects 2D input, got {tuple(x.shape)}.")
@@ -71,15 +95,11 @@ class PlexusRMSNorm(nn.Module):
                 f"Expected local_size={self.local_size}, got {x.shape[1]}."
             )
 
-        dtype = x.dtype
-        x_float = x.float()
-        norm = (x_float * x_float).mean(dim=-1, keepdim=True)
+        x_float, norm = self._pre(x)
         if self.feature_group_size > 1:
-            # norm = _all_reduce(norm, self.feature_group) / self.feature_group_size
             norm = ForwardAllReduce.apply(norm, self.feature_group)
             norm = norm / self.feature_group_size
-        x_normed = x_float * torch.rsqrt(norm + self.eps)
-        return (x_normed * self.weight.float()).to(dtype=dtype)
+        return self._post(x_float, norm, self.weight, self.eps, x.dtype)
 
 
 def sync_norm_gradients(norms, mean: bool = False) -> None:

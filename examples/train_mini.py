@@ -191,6 +191,33 @@ def create_parser():
             "their replication dimension."
         ),
     )
+    parser.add_argument("--multilabel_metric", type=str, default="rocauc",
+        choices=["rocauc", "f1_micro"],
+        help="Metric for multi-label evaluation: rocauc (default, for ogbn-proteins) or f1_micro (for yelp).")
+    parser.add_argument(
+        "--compile_norm",
+        action="store_true",
+        default=False,
+        help="Use torch.compile on RMSNorm forward to fuse elementwise kernels.",
+    )
+    parser.add_argument(
+        "--overlap_fwd_comm",
+        action="store_true",
+        default=False,
+        help="Overlap AR(AGG) with Allgather(W) in GCN forward (parallel async NCCL on different groups).",
+    )
+    parser.add_argument(
+        "--overlap_bwd_comm",
+        action="store_true",
+        default=False,
+        help="Overlap AR(grad_agg) with [GRAD_W + RS(grad_W)] in GCN backward (parallel async NCCL).",
+    )
+    parser.add_argument(
+        "--overlap_linear_bwd",
+        action="store_true",
+        default=False,
+        help="Overlap AR(grad_x) with AR(grad_W+bias) in Linear3D backward (parallel async NCCL).",
+    )
     return parser
 
 
@@ -283,19 +310,30 @@ class Net(torch.nn.Module):
                 gather_features_in_depth=False,
             )
 
-    def forward(self, x, edge_index_shards):
+    def forward(self, x, edge_index_shards, layout_metadata=None):
         ax.get_timers().start("input_linear")
         x = self.input_linear(x)
         ax.get_timers().stop("input_linear")
         
         for i in range(self.num_gcn_layers):
+            # residual = x
             x = self.layers[i](x, edge_index_shards)
             
             ax.get_timers().start("activation")
             x = self.norms[i](x)
             x = F.relu(x)
+            # x = F.dropout(x, p=0.3, training=self.training)
+            # if layout_metadata is None:
+            #     residual = _reshard_residual(residual, i)
+            # else:
+            #     residual = _reshard_residual_compact(
+            #         residual,
+            #         i,
+            #         layout_metadata,
+            #     )
+            # x = x + residual
             ax.get_timers().stop("activation")
-            
+
         ax.get_timers().start("output_linear")
         x = self.output_linear(x)
         ax.get_timers().stop("output_linear")
@@ -333,6 +371,7 @@ def train(
     train_mask,
     num_nodes,
     num_classes,
+    layout_metadata=None,
     test: bool = False,
 ):
     # set to training mode
@@ -342,7 +381,7 @@ def train(
     optimizer.zero_grad()
 
     # forward pass
-    output = model(features_local, adj_shards)
+    output = model(features_local, adj_shards, layout_metadata=layout_metadata)
 
     if labels.ndim == 2 and labels.size(-1) > 1:
         # Multi-label (e.g., ogbn-proteins): BCE-with-logits on raw scores.
@@ -367,9 +406,12 @@ def train(
 
     # backward pass
     loss.backward()
+    ax.get_timers().start("sync_norm_gradients")
     sync_norm_gradients(model.norms, mean=plx.avg_grad)
+    ax.get_timers().stop("sync_norm_gradients")
+    ax.get_timers().start("sync_data_parallel_gradients")
     _sync_data_parallel_gradients(optimizer)
-
+    ax.get_timers().stop("sync_data_parallel_gradients")
     # update weights
     optimizer.step()
 
@@ -459,6 +501,7 @@ def _prepare_compact_minibatch(
         list[tuple[torch.Tensor, torch.Tensor]],
         torch.Tensor | None,
         int,
+        dict,
     ]
     | None
 ):
@@ -556,13 +599,43 @@ def _prepare_compact_minibatch(
     if timers is not None:
         timers.stop("compact label slice")
     num_nodes_loss = 2**62
+    layout_metadata = {
+        "row_idx_list": row_idx_list,
+        "col_idx_list": col_idx_list,
+        "row_starts": data_loader.adj_dim1_start,
+        "col_starts": data_loader.adj_dim2_start,
+        "allow_missing": False,
+    }
     return (
         features_mb,
         labels_mb,
         adj_shards_mb,
         train_mask_mb,
         num_nodes_loss,
+        layout_metadata,
     )
+
+
+def _build_full_layout_metadata(data_loader, device: torch.device) -> dict:
+    return {
+        "row_idx_list": [
+            torch.arange(stop - start, device=device, dtype=torch.long)
+            for start, stop in zip(
+                data_loader.adj_dim1_start,
+                data_loader.adj_dim1_stop,
+            )
+        ],
+        "col_idx_list": [
+            torch.arange(stop - start, device=device, dtype=torch.long)
+            for start, stop in zip(
+                data_loader.adj_dim2_start,
+                data_loader.adj_dim2_stop,
+            )
+        ],
+        "row_starts": data_loader.adj_dim1_start,
+        "col_starts": data_loader.adj_dim2_start,
+        "allow_missing": True,
+    }
 
 
 def _launch_compact_prefetch(
@@ -615,6 +688,48 @@ def _loss_groups(num_gcn_layers):
     return (depth_group, outer_group)
 
 
+def _all_gather_variable_rows(
+    tensor: torch.Tensor,
+    process_group,
+) -> tuple[torch.Tensor, list[int]]:
+    if not dist.is_initialized() or dist.get_world_size(process_group) == 1:
+        return tensor, [int(tensor.shape[0])]
+
+    local_rows = torch.tensor(
+        [int(tensor.shape[0])],
+        device=tensor.device,
+        dtype=torch.long,
+    )
+    gathered_sizes = [
+        torch.empty_like(local_rows)
+        for _ in range(dist.get_world_size(process_group))
+    ]
+    dist.all_gather(gathered_sizes, local_rows, group=process_group)
+    row_sizes = [int(sz.item()) for sz in gathered_sizes]
+    max_rows = max(row_sizes, default=0)
+
+    if tensor.ndim == 1:
+        padded = tensor.new_empty(max_rows)
+        if tensor.shape[0] > 0:
+            padded[: tensor.shape[0]] = tensor
+        if tensor.shape[0] < max_rows:
+            padded[tensor.shape[0] :] = 0
+    else:
+        padded = tensor.new_empty((max_rows, *tensor.shape[1:]))
+        if tensor.shape[0] > 0:
+            padded[: tensor.shape[0]] = tensor
+        if tensor.shape[0] < max_rows:
+            padded[tensor.shape[0] :] = 0
+
+    gathered = [torch.empty_like(padded) for _ in range(dist.get_world_size(process_group))]
+    dist.all_gather(gathered, padded.contiguous(), group=process_group)
+    pieces = [chunk[:rows] for chunk, rows in zip(gathered, row_sizes)]
+
+    if not pieces:
+        return tensor[:0], row_sizes
+    return torch.cat(pieces, dim=0), row_sizes
+
+
 def _outer_group_letter(layer_num: int) -> str:
     return _layer_groups(layer_num)[0]
 
@@ -632,6 +747,68 @@ def _reshard_residual(x: torch.Tensor, layer_num: int) -> torch.Tensor:
     x_full = Drop.apply(x_full, depth_pg, 0)
     x_full = Drop.apply(x_full, outer_pg, 1)
     return x_full
+
+
+def _reshard_residual_compact(
+    x: torch.Tensor,
+    layer_num: int,
+    layout_metadata: dict,
+) -> torch.Tensor:
+    layout_idx = layer_num % len(layout_metadata["row_idx_list"])
+    row_idx = layout_metadata["row_idx_list"][layout_idx]
+    col_idx = layout_metadata["col_idx_list"][layout_idx]
+    row_start = int(layout_metadata["row_starts"][layout_idx])
+    col_start = int(layout_metadata["col_starts"][layout_idx])
+
+    outer_group, inner_group, _ = _layer_groups(layer_num)
+    _, _, process_groups = get_process_groups_info((outer_group, inner_group))
+    outer_pg, inner_pg = process_groups
+
+    # Compact minibatch yields uneven local row counts, so the standard
+    # Gather/Drop rotation on dim 0 is not valid. Rebuild the sampled rows by
+    # global node id, then reshard only the feature dimension.
+    x_full_hidden = Gather.apply(x, inner_pg, 1)
+
+    src_global = col_idx + col_start
+    gathered_x, _ = _all_gather_variable_rows(x_full_hidden, outer_pg)
+    gathered_src_global, _ = _all_gather_variable_rows(src_global, outer_pg)
+    if gathered_src_global.numel() > 1:
+        order = torch.argsort(gathered_src_global)
+        gathered_src_global = gathered_src_global.index_select(0, order)
+        gathered_x = gathered_x.index_select(0, order)
+
+    dst_global = row_idx + row_start
+    if dst_global.numel() == 0:
+        return Drop.apply(gathered_x[:0], outer_pg, 1)
+
+    allow_missing = bool(layout_metadata.get("allow_missing", False))
+    positions = torch.searchsorted(gathered_src_global, dst_global)
+    valid = positions < gathered_src_global.numel()
+    if gathered_src_global.numel() > 0:
+        safe_positions = positions.clamp(max=gathered_src_global.numel() - 1)
+        valid = valid & (
+            gathered_src_global.index_select(0, safe_positions) == dst_global
+        )
+    if not torch.all(valid) and not allow_missing:
+        missing = dst_global[~valid][:8].tolist()
+        raise RuntimeError(
+            "Residual reshard could not match sampled nodes between layouts. "
+            f"layer={layer_num}, missing_global_nodes={missing}"
+        )
+
+    if torch.all(valid):
+        x_reordered = gathered_x.index_select(0, positions)
+    else:
+        x_reordered = gathered_x.new_zeros((dst_global.numel(), *gathered_x.shape[1:]))
+        if valid.any():
+            matched_dst = valid.nonzero(as_tuple=False).squeeze(1)
+            matched_src = positions.index_select(0, matched_dst)
+            x_reordered.index_copy_(
+                0,
+                matched_dst,
+                gathered_x.index_select(0, matched_src),
+            )
+    return Drop.apply(x_reordered, outer_pg, 1)
 
 
 def _layer_groups(layer_num: int):
@@ -775,27 +952,29 @@ def _compute_split_metrics(pred, labels, mask, num_classes, node_group):
 
 
 @torch.no_grad()
-def evaluate(model, features_local, adj_shards, labels, masks, num_nodes, num_classes):
+def evaluate(
+    model,
+    features_local,
+    adj_shards,
+    labels,
+    masks,
+    num_nodes,
+    num_classes,
+    layout_metadata=None,
+    multilabel_metric="rocauc",
+):
     groups = _loss_groups(model.num_gcn_layers)
     _, _, process_groups = get_process_groups_info(groups)
     node_group = process_groups[0]
     class_group = process_groups[1]
 
     model.eval()
-    logits = model(features_local, adj_shards)
+    logits = model(features_local, adj_shards, layout_metadata=layout_metadata)
 
-    # Multi-label (e.g., ogbn-proteins): gather logits across class+node groups and
-    # evaluate ROC-AUC using OGB Evaluator (rank 0 reports).
+    # Multi-label (e.g., ogbn-proteins, yelp): gather logits across class+node groups.
     if labels.ndim == 2 and labels.size(-1) > 1:
         if masks is None:
             return {}
-
-        try:
-            from ogb.nodeproppred import Evaluator
-        except Exception as exc:
-            raise RuntimeError(
-                "Failed to import OGB Evaluator (ogb.nodeproppred). Ensure the `ogb` package and its dependencies are installed."
-            ) from exc
 
         # 1) Gather class shards -> full logits for this node shard.
         class_world = dist.get_world_size(group=class_group)
@@ -826,15 +1005,41 @@ def evaluate(model, features_local, adj_shards, labels, masks, num_nodes, num_cl
         if dist.get_rank() != 0:
             return {}
 
-        evaluator = Evaluator(name="ogbn-proteins")
-        results = {}
-        for split in ("train", "val", "test"):
-            mask = gathered_masks.get(split)
-            if mask is None:
-                results[split] = None
-                continue
-            results[split] = evaluator.eval({"y_true": y_true[mask], "y_pred": y_pred[mask]})
-        return results
+        if multilabel_metric == "f1_micro":
+            from sklearn.metrics import f1_score
+
+            y_pred_binary = (y_pred > 0).cpu().numpy()
+            y_true_np = y_true.cpu().numpy()
+            results = {}
+            for split in ("train", "val", "test"):
+                mask = gathered_masks.get(split)
+                if mask is None:
+                    results[split] = None
+                    continue
+                mask_np = mask.cpu().numpy()
+                results[split] = {
+                    "f1_micro": f1_score(
+                        y_true_np[mask_np], y_pred_binary[mask_np], average="micro"
+                    )
+                }
+            return results
+        else:
+            try:
+                from ogb.nodeproppred import Evaluator
+            except Exception as exc:
+                raise RuntimeError(
+                    "Failed to import OGB Evaluator (ogb.nodeproppred). Ensure the `ogb` package and its dependencies are installed."
+                ) from exc
+
+            evaluator = Evaluator(name="ogbn-proteins")
+            results = {}
+            for split in ("train", "val", "test"):
+                mask = gathered_masks.get(split)
+                if mask is None:
+                    results[split] = None
+                    continue
+                results[split] = evaluator.eval({"y_true": y_true[mask], "y_pred": y_pred[mask]})
+            return results
 
     pred = _distributed_argmax(logits, model.num_gcn_layers, num_nodes, num_classes)
 
@@ -877,6 +1082,9 @@ if __name__ == "__main__":
         bf16_spmm_flag=args.bf16_spmm,
         bf16_gemm_flag=args.bf16_gemm,
         avg_grad_flag=args.avg_grad,
+        overlap_fwd_comm_flag=args.overlap_fwd_comm,
+        overlap_bwd_comm_flag=args.overlap_bwd_comm,
+        overlap_linear_bwd_flag=args.overlap_linear_bwd,
     )
     dp_rank = ax.comm_handle.data_parallel_rank
 
@@ -907,6 +1115,12 @@ if __name__ == "__main__":
         train_features=args.train_features,
     ).to(torch.device("cuda"))
 
+    if args.compile_norm:
+        for norm in model.norms:
+            norm.compile()
+        if dist.get_rank() == 0:
+            print("[info] RMSNorm elementwise ops compiled with torch.compile")
+
     # create optimizer for parameters
     optim_params = list(model.parameters())
     if args.train_features:
@@ -927,7 +1141,7 @@ if __name__ == "__main__":
 
     best_valid = BestValidTracker() if do_eval and dist.get_rank() == 0 else None
     if best_valid is not None and labels.ndim == 2 and labels.size(-1) > 1:
-        best_valid = BestValidTracker(metric_name="rocauc", percent_scale=True)
+        best_valid = BestValidTracker(metric_name=args.multilabel_metric, percent_scale=True)
 
     train_mask = masks.get("train") if masks is not None else None
     if args.train_adj and adj_shards_train is None and dist.get_rank() == 0:
@@ -950,6 +1164,8 @@ if __name__ == "__main__":
     overlap_samp = bool(args.overlap_samp and use_minibatch)
     if args.overlap_samp and not use_minibatch and dist.get_rank() == 0:
         print("[warn] --overlap_samp is ignored because minibatch is disabled.")
+
+    full_layout_metadata = _build_full_layout_metadata(data_loader, features.device)
 
     minibatch_seed = args.seed if args.minibatch_seed is None else args.minibatch_seed
     minibatch_seed = int(minibatch_seed) + (int(dp_rank) * 1000003)
@@ -1026,12 +1242,13 @@ if __name__ == "__main__":
             max_workers=1, thread_name_prefix="minibatch_prefetch"
         )
         prefetch_stream = torch.cuda.Stream(device=prefetch_device_index)
-
+        
+    tag=1
     # training loop
     for i in range(args.num_epochs):
         # if i == PROFILE_START_EPOCH:
         #     torch.cuda.profiler.start()
-        # range of epochs to time (inclusive of both endpoints)
+        # torch.cuda.nvtx.range_push("epoch " + str(i))
         if args.timing_start_epoch is None:
             args.timing_start_epoch = 0
 
@@ -1119,6 +1336,7 @@ if __name__ == "__main__":
                     adj_to_use,
                     mask_to_use,
                     num_nodes_loss,
+                    layout_metadata,
                 ) = minibatch
             else:
                 features_mb = features
@@ -1126,6 +1344,7 @@ if __name__ == "__main__":
                 adj_to_use = train_adj_shards
                 mask_to_use = train_mask
                 num_nodes_loss = num_nodes
+                layout_metadata = full_layout_metadata
 
             ax.get_timers().start("train step")
             with record_function("train"):
@@ -1138,11 +1357,12 @@ if __name__ == "__main__":
                     mask_to_use,
                     num_nodes_loss,
                     num_classes,
+                    layout_metadata=layout_metadata,
                     test=args.test,
                 )
             ax.get_timers().stop("train step")
             epoch_loss += float(loss.detach().item())
-            # torch.cuda.nvtx.range_pop()
+        # torch.cuda.nvtx.range_pop()
             
         # if i == PROFILE_END_EPOCH:
         #     torch.cuda.profiler.stop()
@@ -1163,6 +1383,8 @@ if __name__ == "__main__":
             prof.step()
 
         if do_eval and args.eval_every > 0 and (i + 1) % args.eval_every == 0:
+            # if tag == 1:
+            #     ax.get_timers().start("eval")
             metrics = evaluate(
                 model,
                 features,
@@ -1171,13 +1393,20 @@ if __name__ == "__main__":
                 masks,
                 num_nodes,
                 num_classes,
+                layout_metadata=full_layout_metadata,
+                multilabel_metric=args.multilabel_metric,
             )
+            # if tag == 1:
+            #     ax.get_timers().stop("eval")
+            #     print_axonn_timer_data(ax.get_timers().get_times()[0])
+            #     tag = 0
             if dist.get_rank() == 0:
                 for split, m in metrics.items():
                     if m is None:
                         continue
                     if labels.ndim == 2 and labels.size(-1) > 1:
-                        print("{}: rocauc {:.4f}".format(split.upper(), m["rocauc"]))
+                        mk = args.multilabel_metric
+                        print("{}: {} {:.4f}".format(split.upper(), mk, m[mk]))
                     else:
                         print(
                             "{}: acc {:.4f}, f1_micro {:.4f}, f1_macro {:.4f} (n={})".format(
@@ -1194,8 +1423,9 @@ if __name__ == "__main__":
                     test_m = metrics.get("test")
                     if train_m is not None and val_m is not None and test_m is not None:
                         if labels.ndim == 2 and labels.size(-1) > 1:
+                            mk = args.multilabel_metric
                             best_valid.add(
-                                train_m["rocauc"], val_m["rocauc"], test_m["rocauc"]
+                                train_m[mk], val_m[mk], test_m[mk]
                             )
                         else:
                             best_valid.add(train_m["acc"], val_m["acc"], test_m["acc"])

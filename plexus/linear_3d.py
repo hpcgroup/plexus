@@ -27,40 +27,148 @@ class Plexus3DLinearFunction(torch.autograd.Function):
         ctx.k_group = k_group
         ctx.matmul_name = matmul_name
         ctx.has_bias = bias is not None
-
+        ax.get_timers().start(matmul_name + " X * W")
         out = tuned_matmul(x, weight.t(), matmul_name + " X * W")
+        ax.get_timers().stop(matmul_name + " X * W")
+        
         _all_reduce(out, k_group)
 
         if bias is not None:
+            ax.get_timers().start("OUT + BIAS")
             out = out + bias
+            ax.get_timers().stop("OUT + BIAS")
         return out
 
     @staticmethod
     def backward(ctx, grad_output):
+        ax.get_timers().start("linear_3d_bwd")
         x, weight = ctx.saved_tensors
         grad_x = grad_weight = grad_bias = None
 
-        if ctx.needs_input_grad[0]:
-            grad_x = tuned_matmul(grad_output, weight, ctx.matmul_name + " GRAD_X")
-            _all_reduce(grad_x, ctx.col_group)
+        # ── choose: parallel AR on different groups vs. original serial ──
+        _use_parallel = (
+            plx.overlap_linear_bwd
+            and ctx.needs_input_grad[0]
+            and ctx.needs_input_grad[1]
+            and dist.is_initialized()
+        )
 
-        if ctx.needs_input_grad[1]:
+        if _use_parallel:
+            # =============================================================
+            # PARALLEL path: AR(grad_x, col_group) ∥ AR(grad_W+bias, row_group)
+            #
+            # 1. compute grad_x  → async AR on col_group
+            # 2. compute grad_W  (overlaps with AR above on NCCL stream)
+            #    + grad_bias     → fused async AR on row_group
+            # 3. wait both       → both ARs ran concurrently
+            # =============================================================
+
+            # 1. compute grad_x and launch async AR on col_group
+            ax.get_timers().start(ctx.matmul_name + " GRAD_X")
+            grad_x = tuned_matmul(
+                grad_output, weight, ctx.matmul_name + " GRAD_X"
+            )
+            ax.get_timers().stop(ctx.matmul_name + " GRAD_X")
+
+            col_world = dist.get_world_size(ctx.col_group)
+            if col_world > 1:
+                ax.get_timers().start("async AR(grad_x) launch")
+                grad_x = grad_x.contiguous()
+                work_x = dist.all_reduce(
+                    grad_x, group=ctx.col_group, async_op=True
+                )
+                ax.get_timers().stop("async AR(grad_x) launch")
+            else:
+                work_x = None
+
+            # 2. compute grad_W (concurrent with AR(grad_x) on NCCL stream)
+            ax.get_timers().start(ctx.matmul_name + " GRAD_W")
             grad_weight = tuned_matmul(
                 grad_output.t(), x, ctx.matmul_name + " GRAD_W"
             )
-            _all_reduce(grad_weight, ctx.row_group)
-            if plx.avg_grad:
-                row_world = dist.get_world_size(ctx.row_group)
-                if row_world > 1:
-                    grad_weight.div_(row_world)
+            ax.get_timers().stop(ctx.matmul_name + " GRAD_W")
 
-        if ctx.has_bias and ctx.needs_input_grad[2]:
-            grad_bias = grad_output.sum(dim=0)
-            _all_reduce(grad_bias, ctx.row_group)
-            if plx.avg_grad:
-                row_world = dist.get_world_size(ctx.row_group)
-                if row_world > 1:
+            # 3. fuse grad_W and grad_bias into a single AR on row_group
+            row_world = dist.get_world_size(ctx.row_group)
+            has_bias = ctx.has_bias and ctx.needs_input_grad[2]
+            if has_bias:
+                grad_bias = grad_output.sum(dim=0)
+
+            if row_world > 1:
+                if has_bias:
+                    weight_numel = grad_weight.numel()
+                    combined = torch.cat(
+                        [grad_weight.reshape(-1), grad_bias]
+                    )
+                    ax.get_timers().start("async AR(grad_W+bias) launch")
+                    work_w = dist.all_reduce(
+                        combined, group=ctx.row_group, async_op=True
+                    )
+                    ax.get_timers().stop("async AR(grad_W+bias) launch")
+                else:
+                    ax.get_timers().start("async AR(grad_W) launch")
+                    work_w = dist.all_reduce(
+                        grad_weight, group=ctx.row_group, async_op=True
+                    )
+                    ax.get_timers().stop("async AR(grad_W) launch")
+            else:
+                work_w = None
+
+            # 4. wait for both
+            if work_x is not None:
+                ax.get_timers().start("wait AR(grad_x)")
+                work_x.wait()
+                ax.get_timers().stop("wait AR(grad_x)")
+            if work_w is not None:
+                ax.get_timers().start("wait AR(grad_W)")
+                work_w.wait()
+                ax.get_timers().stop("wait AR(grad_W)")
+
+            # 5. unpack combined buffer & avg_grad
+            if row_world > 1 and has_bias:
+                grad_weight = combined[:weight_numel].reshape(
+                    grad_weight.shape
+                )
+                grad_bias = combined[weight_numel:]
+
+            if plx.avg_grad and row_world > 1:
+                grad_weight.div_(row_world)
+                if has_bias:
                     grad_bias.div_(row_world)
+
+        else:
+            # =============================================================
+            # ORIGINAL serial path (unchanged)
+            # =============================================================
+            if ctx.needs_input_grad[0]:
+                ax.get_timers().start(ctx.matmul_name + " GRAD_X")
+                grad_x = tuned_matmul(
+                    grad_output, weight, ctx.matmul_name + " GRAD_X"
+                )
+                ax.get_timers().stop(ctx.matmul_name + " GRAD_X")
+                _all_reduce(grad_x, ctx.col_group)
+
+            if ctx.needs_input_grad[1]:
+                ax.get_timers().start(ctx.matmul_name + " GRAD_W")
+                grad_weight = tuned_matmul(
+                    grad_output.t(), x, ctx.matmul_name + " GRAD_W"
+                )
+                ax.get_timers().stop(ctx.matmul_name + " GRAD_W")
+                _all_reduce(grad_weight, ctx.row_group)
+                if plx.avg_grad:
+                    row_world = dist.get_world_size(ctx.row_group)
+                    if row_world > 1:
+                        grad_weight.div_(row_world)
+
+            if ctx.has_bias and ctx.needs_input_grad[2]:
+                grad_bias = grad_output.sum(dim=0)
+                _all_reduce(grad_bias, ctx.row_group)
+                if plx.avg_grad:
+                    row_world = dist.get_world_size(ctx.row_group)
+                    if row_world > 1:
+                        grad_bias.div_(row_world)
+
+        ax.get_timers().stop("linear_3d_bwd")
 
         return grad_x, grad_weight, grad_bias, None, None, None, None
 

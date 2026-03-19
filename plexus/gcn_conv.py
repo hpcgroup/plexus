@@ -297,20 +297,71 @@ class GCNConvFunction(torch.autograd.Function):
             H = x
 
         # compute aggregation (A * H) and all-reduce the result
+        # optionally overlap AR(AGG) with Allgather(W) when they are on
+        # different process groups (overlap_fwd_comm path)
 
-        if plx.block_agg:
-            AGG = chunked_spmm_all_reduce(edge_index, H, aggregation_all_reduce_group)
-        else:
+        _use_parallel_fwd = (
+            plx.overlap_fwd_comm
+            and not plx.block_agg
+            and gather_weights
+            and dist.is_initialized()
+            and dist.get_world_size(all_gather_group) > 1
+        )
+
+        if _use_parallel_fwd:
+            # ---- parallel path: AR(AGG) ∥ Allgather(W) ----
             ax.get_timers().start("AGG = A * H")
             AGG = _spmm(edge_index, H)
             ax.get_timers().stop("AGG = A * H")
-            # TODO "AGG"
-            # _log_collective_message_size("all_reduce", AGG, "AGG", aggregation_all_reduce_group)
-            ax.get_timers().start("allreduce H")
-            _all_reduce_with_optional_lowp(
+
+            # launch async AR(AGG) on aggregation group
+            ax.get_timers().start("async AR(AGG) launch")
+            ar_agg_work, ar_agg_buf = _all_reduce_async_with_optional_lowp(
                 AGG, aggregation_all_reduce_group, enable_lowp=True
             )
+            ax.get_timers().stop("async AR(AGG) launch")
+
+            # launch async Allgather(W) on depth group (different communicator)
+            ax.get_timers().start("async AG(W) launch")
+            w_flat = weight.contiguous()
+            depth_world = dist.get_world_size(all_gather_group)
+            w_gathered = torch.empty(
+                w_flat.shape[0] * depth_world,
+                dtype=w_flat.dtype,
+                device=w_flat.device,
+            )
+            ag_work = dist.all_gather_into_tensor(
+                w_gathered, w_flat, group=all_gather_group, async_op=True
+            )
+            ax.get_timers().stop("async AG(W) launch")
+
+            # wait for AR(AGG)
+            ax.get_timers().start("allreduce H")
+            if ar_agg_work is not None:
+                ar_agg_work.wait()
+            _copy_back_if_needed(AGG, ar_agg_buf)
             ax.get_timers().stop("allreduce H")
+
+            # wait for Allgather(W)
+            ax.get_timers().start("Allgather W")
+            ag_work.wait()
+            ax.get_timers().stop("Allgather W")
+            W = w_gathered.reshape(local_weight_shape)
+        else:
+            # ---- original path ----
+            if plx.block_agg:
+                AGG = chunked_spmm_all_reduce(
+                    edge_index, H, aggregation_all_reduce_group
+                )
+            else:
+                ax.get_timers().start("AGG = A * H")
+                AGG = _spmm(edge_index, H)
+                ax.get_timers().stop("AGG = A * H")
+                ax.get_timers().start("allreduce H")
+                _all_reduce_with_optional_lowp(
+                    AGG, aggregation_all_reduce_group, enable_lowp=True
+                )
+                ax.get_timers().stop("allreduce H")
 
         # save tensors for backward pass
         ctx.use_checkpoint = plx.activation_checkpoint
@@ -323,27 +374,25 @@ class GCNConvFunction(torch.autograd.Function):
         ctx.layer_num = layer_num
 
         if ctx.use_checkpoint:
-            # Save H (pre-spmm features) + A for recomputing AGG in backward
             if ctx.use_no_adj_t:
                 ctx.save_for_backward(H, weight, edge_index)
             else:
                 ctx.save_for_backward(H, weight, edge_index, edge_index_t)
         else:
-            # Original: save AGG directly
             if ctx.use_no_adj_t:
                 ctx.save_for_backward(AGG, weight, edge_index)
             else:
                 ctx.save_for_backward(AGG, weight, edge_index_t)
 
-        # gather weights - assuming that we always have this matrix sharded
-        if gather_weights:
-            ax.get_timers().start("Allgather W")
-            # _log_collective_message_size("allgather", weight, "W", all_gather_group)
-            W = _gather(weight, dim=0, process_group=all_gather_group)
-            ax.get_timers().stop("Allgather W")
-        else:
-            W = weight
-        W = W.reshape(local_weight_shape)
+        if not _use_parallel_fwd:
+            # gather weights (original path only; parallel path already did it)
+            if gather_weights:
+                ax.get_timers().start("Allgather W")
+                W = _gather(weight, dim=0, process_group=all_gather_group)
+                ax.get_timers().stop("Allgather W")
+            else:
+                W = weight
+            W = W.reshape(local_weight_shape)
 
         # combination - (A * H) * W
         ax.get_timers().start("OUT = AGG * W")
@@ -403,100 +452,200 @@ class GCNConvFunction(torch.autograd.Function):
         )
         ax.get_timers().stop("GRAD_AGG = GRAD_OUT * W.T")
 
-        overlap_bwd_allreduce = (
-            plx.overlap_bwd
+        # ── choose backward communication strategy ──
+        _use_parallel_bwd_comm = (
+            plx.overlap_bwd_comm
             and dist.is_initialized()
             and dist.get_world_size(ctx.backward_all_reduce_group) > 1
         )
-        grad_agg_done_event = None
-        grad_agg_work = None
-        grad_agg_reduced = grad_agg
-        if overlap_bwd_allreduce:
-            compute_stream = torch.cuda.current_stream(device=grad_agg.device)
-            comm_stream = _get_bwd_allreduce_stream(grad_agg.device)
-            grad_agg_ready_event = torch.cuda.Event(blocking=False)
-            grad_agg_done_event = torch.cuda.Event(blocking=False)
-            grad_agg_ready_event.record(compute_stream)
 
-            ax.get_timers().start("all-reduce launch")
-            with torch.cuda.stream(comm_stream):
-                comm_stream.wait_event(grad_agg_ready_event)
-                grad_agg_work, grad_agg_reduced = _all_reduce_async_with_optional_lowp(
-                    grad_agg,
-                    ctx.backward_all_reduce_group,
-                    enable_lowp=True,
-                )
-                grad_agg_done_event.record(comm_stream)
-            ax.get_timers().stop("all-reduce launch")
-        else:
-            # TODO "GRAD_AGG"
-            # _log_collective_message_size("all_reduce", grad_agg, "GRAD_AGG", ctx.backward_all_reduce_group)
-            _all_reduce_with_optional_lowp(
+        if _use_parallel_bwd_comm:
+            # ============================================================
+            # PARALLEL path: AR(grad_agg, outer) ∥ [GRAD_W + RS(grad_W, depth)]
+            # AR and RS/AR are on *different* process groups → NCCL runs
+            # them on separate internal streams, achieving true overlap.
+            # ============================================================
+
+            # 1. launch async AR(grad_agg) on backward_all_reduce_group
+            ax.get_timers().start("async AR(grad_agg) launch")
+            ar_agg_work, ar_agg_buf = _all_reduce_async_with_optional_lowp(
                 grad_agg, ctx.backward_all_reduce_group, enable_lowp=True
             )
+            ax.get_timers().stop("async AR(grad_agg) launch")
 
-        # calculate gradient with respect to weight (AGG.T * GRAD_OUTPUT)
-        # and reduce scatter it so they're sharded
-        ax.get_timers().start("GRAD_W = AGG.T * GRAD_OUT")
-        grad_weight = tuned_matmul(
-            torch.t(agg), grad_output, "AGG.T * GRAD_OUT " + str(ctx.layer_num)
-        )
-        ax.get_timers().stop("GRAD_W = AGG.T * GRAD_OUT")
-
-        if ctx.bwd_reduce_scatter_grad_weights:
-            grad_weight = grad_weight.reshape(-1)
-            ax.get_timers().start("ReduceScatter grad_weight")
-            grad_weight = _reduce_scatter(
-                grad_weight,
-                dim=0,
-                process_group=ctx.backward_depth_group,
+            # 2. compute GRAD_W (overlaps with AR on NCCL internal stream)
+            ax.get_timers().start("GRAD_W = AGG.T * GRAD_OUT")
+            grad_weight = tuned_matmul(
+                torch.t(agg), grad_output,
+                "AGG.T * GRAD_OUT " + str(ctx.layer_num),
             )
-            ax.get_timers().stop("ReduceScatter grad_weight")
-        else:
-            # all-reduce instead of reduce-scatter if weights aren't sharded
-            # _all_reduce(grad_weight, ctx.backward_depth_group)
-            _all_reduce_with_optional_lowp(grad_weight, ctx.backward_depth_group, enable_lowp=True)
-            if plx.avg_grad:
+            ax.get_timers().stop("GRAD_W = AGG.T * GRAD_OUT")
+
+            # 3. launch async RS/AR(grad_W) on depth group (different comm)
+            if ctx.bwd_reduce_scatter_grad_weights:
+                grad_weight_flat = grad_weight.reshape(-1)
+                ax.get_timers().start("async RS(grad_W) launch")
                 depth_world = dist.get_world_size(ctx.backward_depth_group)
-                if depth_world > 1:
-                    grad_weight.div_(depth_world)
-            grad_weight = grad_weight.reshape(-1)
+                rs_out = torch.empty(
+                    grad_weight_flat.shape[0] // depth_world,
+                    dtype=grad_weight_flat.dtype,
+                    device=grad_weight_flat.device,
+                )
+                if hasattr(dist, "reduce_scatter_tensor"):
+                    rs_work = dist.reduce_scatter_tensor(
+                        rs_out, grad_weight_flat,
+                        group=ctx.backward_depth_group, async_op=True,
+                    )
+                else:
+                    rs_work = dist._reduce_scatter_base(
+                        rs_out, grad_weight_flat,
+                        group=ctx.backward_depth_group, async_op=True,
+                    )
+                ax.get_timers().stop("async RS(grad_W) launch")
+            else:
+                ax.get_timers().start("async AR(grad_W) launch")
+                ar_w_work, ar_w_buf = _all_reduce_async_with_optional_lowp(
+                    grad_weight, ctx.backward_depth_group, enable_lowp=True
+                )
+                ax.get_timers().stop("async AR(grad_W) launch")
+                rs_work = None
 
-        if grad_agg_done_event is not None:
-            ax.get_timers().start("all-reduce")
-            torch.cuda.current_stream(device=grad_agg.device).wait_event(
-                grad_agg_done_event
-            )
-            if grad_agg_work is not None:
-                grad_agg_work.wait()
-            _copy_back_if_needed(grad_agg, grad_agg_reduced)
-            ax.get_timers().stop("all-reduce")
+            # 4. wait for AR(grad_agg) — needed before GRAD_H
+            ax.get_timers().start("wait AR(grad_agg)")
+            if ar_agg_work is not None:
+                ar_agg_work.wait()
+            _copy_back_if_needed(grad_agg, ar_agg_buf)
+            ax.get_timers().stop("wait AR(grad_agg)")
 
-        # calculate gradient with respect to features (output of the previous layer)
-        ax.get_timers().start("GRAD_H = A.T * GRAD_AGG")
-        grad_x = _spmm(adj_t, grad_agg)
-        ax.get_timers().stop("GRAD_H = A.T * GRAD_AGG")
+            # 5. compute GRAD_H = A.T * grad_agg (needs reduced grad_agg)
+            ax.get_timers().start("GRAD_H = A.T * GRAD_AGG")
+            grad_x = _spmm(adj_t, grad_agg)
+            ax.get_timers().stop("GRAD_H = A.T * GRAD_AGG")
 
-        if ctx.bwd_reduce_scatter_grad_x:
-            # first layer's x is sharded across depth group,
-            # so reduce-scatter grad_x
-            grad_x = grad_x.reshape(-1)
-            # TODO "GRAD_H"
-            # _log_collective_message_size("reduce_scatter", grad_x, "GRAD_H", ctx.backward_depth_group)
-            ax.get_timers().start("ReduceScatter grad_x")
-            grad_x = _reduce_scatter(
-                grad_x, dim=0, process_group=ctx.backward_depth_group
-            )
-            ax.get_timers().stop("ReduceScatter grad_x")
+            # 6. finalize grad_weight (RS/AR should be done by now)
+            if ctx.bwd_reduce_scatter_grad_weights:
+                ax.get_timers().start("wait RS(grad_W)")
+                rs_work.wait()
+                ax.get_timers().stop("wait RS(grad_W)")
+                grad_weight = rs_out
+            else:
+                ax.get_timers().start("wait AR(grad_W)")
+                if ar_w_work is not None:
+                    ar_w_work.wait()
+                _copy_back_if_needed(grad_weight, ar_w_buf)
+                ax.get_timers().stop("wait AR(grad_W)")
+                if plx.avg_grad:
+                    depth_world = dist.get_world_size(ctx.backward_depth_group)
+                    if depth_world > 1:
+                        grad_weight.div_(depth_world)
+                grad_weight = grad_weight.reshape(-1)
+
+            # 7. RS/AR(grad_x) on depth_group (unchanged)
+            if ctx.bwd_reduce_scatter_grad_x:
+                grad_x = grad_x.reshape(-1)
+                ax.get_timers().start("ReduceScatter grad_x")
+                grad_x = _reduce_scatter(
+                    grad_x, dim=0, process_group=ctx.backward_depth_group
+                )
+                ax.get_timers().stop("ReduceScatter grad_x")
+            else:
+                ax.get_timers().start("allreduce grad_x")
+                _all_reduce_with_optional_lowp(
+                    grad_x, ctx.backward_depth_group, enable_lowp=True
+                )
+                ax.get_timers().stop("allreduce grad_x")
+
         else:
-            # x is replicated across depth group after first layer,
-            # so all-reduce grad_x
-            ax.get_timers().start("allreduce grad_x")
-            _all_reduce_with_optional_lowp(
-                grad_x, ctx.backward_depth_group, enable_lowp=True
+            # ============================================================
+            # ORIGINAL path (with optional overlap_bwd stream overlap)
+            # ============================================================
+            overlap_bwd_allreduce = (
+                plx.overlap_bwd
+                and dist.is_initialized()
+                and dist.get_world_size(ctx.backward_all_reduce_group) > 1
             )
-            ax.get_timers().stop("allreduce grad_x")
-            # _all_reduce(grad_x, ctx.backward_depth_group)
+            grad_agg_done_event = None
+            grad_agg_work = None
+            grad_agg_reduced = grad_agg
+            if overlap_bwd_allreduce:
+                compute_stream = torch.cuda.current_stream(device=grad_agg.device)
+                comm_stream = _get_bwd_allreduce_stream(grad_agg.device)
+                grad_agg_ready_event = torch.cuda.Event(blocking=False)
+                grad_agg_done_event = torch.cuda.Event(blocking=False)
+                grad_agg_ready_event.record(compute_stream)
+
+                ax.get_timers().start("all-reduce launch")
+                with torch.cuda.stream(comm_stream):
+                    comm_stream.wait_event(grad_agg_ready_event)
+                    grad_agg_work, grad_agg_reduced = (
+                        _all_reduce_async_with_optional_lowp(
+                            grad_agg,
+                            ctx.backward_all_reduce_group,
+                            enable_lowp=True,
+                        )
+                    )
+                    grad_agg_done_event.record(comm_stream)
+                ax.get_timers().stop("all-reduce launch")
+            else:
+                _all_reduce_with_optional_lowp(
+                    grad_agg, ctx.backward_all_reduce_group, enable_lowp=True
+                )
+
+            # calculate gradient with respect to weight (AGG.T * GRAD_OUTPUT)
+            ax.get_timers().start("GRAD_W = AGG.T * GRAD_OUT")
+            grad_weight = tuned_matmul(
+                torch.t(agg), grad_output,
+                "AGG.T * GRAD_OUT " + str(ctx.layer_num),
+            )
+            ax.get_timers().stop("GRAD_W = AGG.T * GRAD_OUT")
+
+            if ctx.bwd_reduce_scatter_grad_weights:
+                grad_weight = grad_weight.reshape(-1)
+                ax.get_timers().start("ReduceScatter grad_weight")
+                grad_weight = _reduce_scatter(
+                    grad_weight,
+                    dim=0,
+                    process_group=ctx.backward_depth_group,
+                )
+                ax.get_timers().stop("ReduceScatter grad_weight")
+            else:
+                _all_reduce_with_optional_lowp(
+                    grad_weight, ctx.backward_depth_group, enable_lowp=True
+                )
+                if plx.avg_grad:
+                    depth_world = dist.get_world_size(ctx.backward_depth_group)
+                    if depth_world > 1:
+                        grad_weight.div_(depth_world)
+                grad_weight = grad_weight.reshape(-1)
+
+            if grad_agg_done_event is not None:
+                ax.get_timers().start("all-reduce")
+                torch.cuda.current_stream(device=grad_agg.device).wait_event(
+                    grad_agg_done_event
+                )
+                if grad_agg_work is not None:
+                    grad_agg_work.wait()
+                _copy_back_if_needed(grad_agg, grad_agg_reduced)
+                ax.get_timers().stop("all-reduce")
+
+            # gradient with respect to features (previous layer output)
+            ax.get_timers().start("GRAD_H = A.T * GRAD_AGG")
+            grad_x = _spmm(adj_t, grad_agg)
+            ax.get_timers().stop("GRAD_H = A.T * GRAD_AGG")
+
+            if ctx.bwd_reduce_scatter_grad_x:
+                grad_x = grad_x.reshape(-1)
+                ax.get_timers().start("ReduceScatter grad_x")
+                grad_x = _reduce_scatter(
+                    grad_x, dim=0, process_group=ctx.backward_depth_group
+                )
+                ax.get_timers().stop("ReduceScatter grad_x")
+            else:
+                ax.get_timers().start("allreduce grad_x")
+                _all_reduce_with_optional_lowp(
+                    grad_x, ctx.backward_depth_group, enable_lowp=True
+                )
+                ax.get_timers().stop("allreduce grad_x")
 
         ax.get_timers().stop("gcn conv bwd")
 
