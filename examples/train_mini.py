@@ -218,6 +218,30 @@ def create_parser():
         default=False,
         help="Overlap AR(grad_x) with AR(grad_W+bias) in Linear3D backward (parallel async NCCL).",
     )
+    parser.add_argument(
+        "--vectorize_dp_grad",
+        action="store_true",
+        default=False,
+        help=(
+            "Flatten all parameter gradients into a single buffer before the "
+            "data-parallel all-reduce (one large AR instead of many small ones)."
+        ),
+    )
+    parser.add_argument(
+        "--fuse_norm_activation",
+        action="store_true",
+        default=False,
+        help=(
+            "Fuse RMSNorm post-processing, ReLU, and Dropout into a single "
+            "torch.compile kernel (implies --compile_norm)."
+        ),
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=0.3,
+        help="Dropout probability (default: 0.3).",
+    )
     return parser
 
 
@@ -233,10 +257,14 @@ class Net(torch.nn.Module):
         hidden_size,
         output_size,
         train_features: bool = False,
+        fuse_norm_activation: bool = False,
+        dropout: float = 0.3,
     ):
         super(Net, self).__init__()
 
         self.num_gcn_layers = num_gcn_layers
+        self.fuse_norm_activation = fuse_norm_activation
+        self.dropout = dropout
 
         node_group, class_group = _loss_groups(self.num_gcn_layers)
         last_outer, _, _ = _layer_groups(self.num_gcn_layers - 1)
@@ -321,8 +349,9 @@ class Net(torch.nn.Module):
             
             ax.get_timers().start("activation")
             x = self.norms[i](x)
-            x = F.relu(x)
-            # x = F.dropout(x, p=0.3, training=self.training)
+            if not self.fuse_norm_activation:
+                x = F.relu(x)
+                x = F.dropout(x, p=self.dropout, training=self.training)
             # if layout_metadata is None:
             #     residual = _reshard_residual(residual, i)
             # else:
@@ -340,7 +369,9 @@ class Net(torch.nn.Module):
         return x
 
 
-def _sync_data_parallel_gradients(optimizer, mean: bool = True) -> None:
+def _sync_data_parallel_gradients(
+    optimizer, mean: bool = True, vectorize: bool = False
+) -> None:
     if not dist.is_initialized():
         return
     dp_group = ax.comm_handle.data_parallel_group
@@ -350,14 +381,28 @@ def _sync_data_parallel_gradients(optimizer, mean: bool = True) -> None:
     if dp_world <= 1:
         return
     ax.get_timers().start("dp grad sync")
+    grads = []
     for param_group in optimizer.param_groups:
         for param in param_group["params"]:
-            grad = param.grad
-            if grad is None:
-                continue
-            dist.all_reduce(grad, group=dp_group)
+            if param.grad is not None:
+                grads.append(param.grad)
+    if grads:
+        if vectorize:
+            from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
+
+            flat = _flatten_dense_tensors(grads)
+            dist.all_reduce(flat, group=dp_group)
             if mean:
-                grad.div_(dp_world)
+                flat.div_(dp_world)
+            for old_tensor, new_tensor in zip(
+                grads, _unflatten_dense_tensors(flat, grads)
+            ):
+                old_tensor.data = new_tensor
+        else:
+            for grad in grads:
+                dist.all_reduce(grad, group=dp_group)
+                if mean:
+                    grad.div_(dp_world)
     ax.get_timers().stop("dp grad sync")
 
 
@@ -373,6 +418,7 @@ def train(
     num_classes,
     layout_metadata=None,
     test: bool = False,
+    vectorize_dp_grad: bool = False,
 ):
     # set to training mode
     model.train()
@@ -410,7 +456,7 @@ def train(
     sync_norm_gradients(model.norms, mean=plx.avg_grad)
     ax.get_timers().stop("sync_norm_gradients")
     ax.get_timers().start("sync_data_parallel_gradients")
-    _sync_data_parallel_gradients(optimizer)
+    _sync_data_parallel_gradients(optimizer, vectorize=vectorize_dp_grad)
     ax.get_timers().stop("sync_data_parallel_gradients")
     # update weights
     optimizer.step()
@@ -1113,13 +1159,20 @@ if __name__ == "__main__":
         args.hidden_size,
         num_classes,
         train_features=args.train_features,
+        fuse_norm_activation=args.fuse_norm_activation,
+        dropout=args.dropout,
     ).to(torch.device("cuda"))
 
-    if args.compile_norm:
+    if args.compile_norm or args.fuse_norm_activation:
         for norm in model.norms:
-            norm.compile()
+            norm.compile(
+                fuse_activation=args.fuse_norm_activation, dropout_p=args.dropout
+            )
         if dist.get_rank() == 0:
-            print("[info] RMSNorm elementwise ops compiled with torch.compile")
+            if args.fuse_norm_activation:
+                print("[info] RMSNorm + ReLU + Dropout fused and compiled with torch.compile")
+            else:
+                print("[info] RMSNorm elementwise ops compiled with torch.compile")
 
     # create optimizer for parameters
     optim_params = list(model.parameters())
@@ -1359,6 +1412,7 @@ if __name__ == "__main__":
                     num_classes,
                     layout_metadata=layout_metadata,
                     test=args.test,
+                    vectorize_dp_grad=args.vectorize_dp_grad,
                 )
             ax.get_timers().stop("train step")
             epoch_loss += float(loss.detach().item())

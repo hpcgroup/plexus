@@ -22,6 +22,23 @@ def _rmsnorm_post(
     return (x_normed * weight.float()).to(dtype=dtype)
 
 
+def _rmsnorm_post_relu_dropout(
+    x_float: torch.Tensor,
+    norm: torch.Tensor,
+    weight: torch.Tensor,
+    eps: float,
+    dtype: torch.dtype,
+    dropout_p: float,
+    training: bool,
+) -> torch.Tensor:
+    """Normalize, scale, ReLU, and dropout — fused for a single compiled kernel."""
+    x_normed = x_float * torch.rsqrt(norm + eps)
+    out = (x_normed * weight.float()).to(dtype=dtype)
+    out = torch.nn.functional.relu(out)
+    out = torch.nn.functional.dropout(out, p=dropout_p, training=training)
+    return out
+
+
 class PlexusRMSNorm(nn.Module):
     """
     Tensor-parallel RMSNorm over the feature dimension.
@@ -81,11 +98,24 @@ class PlexusRMSNorm(nn.Module):
 
         self._pre = _rmsnorm_pre
         self._post = _rmsnorm_post
+        self._fuse_activation = False
+        self._dropout_p = 0.0
 
-    def compile(self):
-        """Compile the elementwise parts of RMSNorm with torch.compile."""
+    def compile(self, fuse_activation=False, dropout_p=0.0):
+        """Compile the elementwise parts of RMSNorm with torch.compile.
+
+        Args:
+            fuse_activation: If True, fuse ReLU + Dropout into the post-norm
+                kernel, eliminating two extra memory round-trips.
+            dropout_p: Dropout probability (only used when *fuse_activation*).
+        """
         self._pre = torch.compile(_rmsnorm_pre)
-        self._post = torch.compile(_rmsnorm_post)
+        if fuse_activation:
+            self._post = torch.compile(_rmsnorm_post_relu_dropout)
+            self._fuse_activation = True
+            self._dropout_p = dropout_p
+        else:
+            self._post = torch.compile(_rmsnorm_post)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         if x.ndim != 2:
@@ -99,6 +129,11 @@ class PlexusRMSNorm(nn.Module):
         if self.feature_group_size > 1:
             norm = ForwardAllReduce.apply(norm, self.feature_group)
             norm = norm / self.feature_group_size
+        if self._fuse_activation:
+            return self._post(
+                x_float, norm, self.weight, self.eps, x.dtype,
+                self._dropout_p, self.training,
+            )
         return self._post(x_float, norm, self.weight, self.eps, x.dtype)
 
 
