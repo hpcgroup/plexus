@@ -88,7 +88,7 @@ def create_parser():
         help="Enables tuning of dense matrix multiplications",
     )
     parser.add_argument("--timing_start_epoch", type=int, default=None)
-    parser.add_argument("--timing_end_epoch", type=int, default=2)
+    parser.add_argument("--timing_end_epoch", type=int, default=9)
     parser.add_argument("--lr", type=float, default=1e-2)
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--num_gcn_layers", type=int, default=3)
