@@ -53,7 +53,7 @@ G_DATA=${4:-1}
 ratio=${5:-0.05}
 
 TRAIN_FILE=examples/train_mini.py
-PARTITIONS_PER_DIM=8
+PARTITIONS_PER_DIM=32
 PARTITIONED_DATA_DIR=./dataset/amazon_14m/amazon_part${PARTITIONS_PER_DIM}
 
 export CXX=CC 
