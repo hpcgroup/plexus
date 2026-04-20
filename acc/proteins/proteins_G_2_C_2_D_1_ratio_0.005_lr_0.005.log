@@ -1,0 +1,999 @@
+/pscratch/sd/c/cunyang/gnn/plexus/plexus/utils/dataloader.py:425: UserWarning: Sparse CSR tensor support is in beta state. If you miss a functionality in the sparse tensor support, please submit a feature request to https://github.com/pytorch/pytorch/issues. (Triggered internally at /pytorch/aten/src/ATen/SparseCsrTensorImpl.cpp:53.)
+  adj_local = adj_local.to_sparse_csr()
+/pscratch/sd/c/cunyang/gnn/plexus/plexus/utils/dataloader.py:425: UserWarning: Sparse CSR tensor support is in beta state. If you miss a functionality in the sparse tensor support, please submit a feature request to https://github.com/pytorch/pytorch/issues. (Triggered internally at /pytorch/aten/src/ATen/SparseCsrTensorImpl.cpp:53.)
+  adj_local = adj_local.to_sparse_csr()
+/pscratch/sd/c/cunyang/gnn/plexus/plexus/utils/dataloader.py:425: UserWarning: Sparse CSR tensor support is in beta state. If you miss a functionality in the sparse tensor support, please submit a feature request to https://github.com/pytorch/pytorch/issues. (Triggered internally at /pytorch/aten/src/ATen/SparseCsrTensorImpl.cpp:53.)
+  adj_local = adj_local.to_sparse_csr()
+/pscratch/sd/c/cunyang/gnn/plexus/plexus/utils/dataloader.py:425: UserWarning: Sparse CSR tensor support is in beta state. If you miss a functionality in the sparse tensor support, please submit a feature request to https://github.com/pytorch/pytorch/issues. (Triggered internally at /pytorch/aten/src/ATen/SparseCsrTensorImpl.cpp:53.)
+  adj_local = adj_local.to_sparse_csr()
+steps_per_epoch:  201
+steps_per_epoch:  201
+steps_per_epoch:  201
+steps_per_epoch:  201
+Epoch: 000, Train Loss: 0.3307
+Epoch: 001, Train Loss: 0.3120
+|--[95m 'drop | Max Time: 0.179 ms | Avg Time: 0.158 ms | Load Imbalance: 1.130' [0m
+
+|--[95m 'epoch 0 | Max Time: 4297.264 ms | Avg Time: 4296.804 ms | Load Imbalance: 1.000' [0m
+	|--[92m 'prefetch launch | Max Time: 7.547 ms | Avg Time: 7.393 ms | Load Imbalance: 1.021' [0m
+	|--[92m 'prefetch wait | Max Time: 821.285 ms | Avg Time: 738.479 ms | Load Imbalance: 1.112' [0m
+	|--[92m 'train step | Max Time: 3539.102 ms | Avg Time: 3501.071 ms | Load Imbalance: 1.011' [0m
+		|--[96m 'input_linear | Max Time: 524.015 ms | Avg Time: 454.400 ms | Load Imbalance: 1.153' [0m
+			|--[91m 'input_linear X * W | Max Time: 152.438 ms | Avg Time: 151.692 ms | Load Imbalance: 1.005' [0m
+			|--[91m 'all-reduce | Max Time: 330.333 ms | Avg Time: 260.031 ms | Load Imbalance: 1.270' [0m
+			|--[91m 'OUT + BIAS | Max Time: 11.103 ms | Avg Time: 9.461 ms | Load Imbalance: 1.174' [0m
+		|--[96m 'gcn conv fwd | Max Time: 1015.154 ms | Avg Time: 965.265 ms | Load Imbalance: 1.052' [0m
+			|--[91m 'AGG = A * H | Max Time: 107.016 ms | Avg Time: 103.824 ms | Load Imbalance: 1.031' [0m
+			|--[91m 'allreduce H | Max Time: 481.612 ms | Avg Time: 440.381 ms | Load Imbalance: 1.094' [0m
+				|--[95m 'all-reduce | Max Time: 464.862 ms | Avg Time: 425.290 ms | Load Imbalance: 1.093' [0m
+			|--[91m 'Allgather W | Max Time: 176.068 ms | Avg Time: 170.895 ms | Load Imbalance: 1.030' [0m
+				|--[95m 'gather | Max Time: 165.941 ms | Avg Time: 159.656 ms | Load Imbalance: 1.039' [0m
+			|--[91m 'OUT = AGG * W | Max Time: 47.438 ms | Avg Time: 42.149 ms | Load Imbalance: 1.125' [0m
+			|--[91m 'allreduce Q | Max Time: 185.840 ms | Avg Time: 161.363 ms | Load Imbalance: 1.152' [0m
+				|--[95m 'all-reduce | Max Time: 179.895 ms | Avg Time: 149.356 ms | Load Imbalance: 1.204' [0m
+		|--[96m 'activation | Max Time: 272.198 ms | Avg Time: 258.870 ms | Load Imbalance: 1.051' [0m
+			|--[91m 'all-reduce | Max Time: 136.802 ms | Avg Time: 116.580 ms | Load Imbalance: 1.173' [0m
+		|--[96m 'output_linear | Max Time: 34.523 ms | Avg Time: 26.463 ms | Load Imbalance: 1.305' [0m
+			|--[91m 'output_linear X * W | Max Time: 10.514 ms | Avg Time: 8.412 ms | Load Imbalance: 1.250' [0m
+			|--[91m 'all-reduce | Max Time: 2.656 ms | Avg Time: 2.132 ms | Load Imbalance: 1.246' [0m
+			|--[91m 'OUT + BIAS | Max Time: 6.246 ms | Avg Time: 4.662 ms | Load Imbalance: 1.340' [0m
+		|--[96m 'bce fwd | Max Time: 371.790 ms | Avg Time: 347.829 ms | Load Imbalance: 1.069' [0m
+		|--[96m 'bce bwd | Max Time: 12.298 ms | Avg Time: 9.566 ms | Load Imbalance: 1.286' [0m
+		|--[96m 'linear_3d_bwd | Max Time: 310.566 ms | Avg Time: 289.151 ms | Load Imbalance: 1.074' [0m
+			|--[91m 'output_linear GRAD_X | Max Time: 9.574 ms | Avg Time: 7.417 ms | Load Imbalance: 1.291' [0m
+			|--[91m 'all-reduce | Max Time: 246.654 ms | Avg Time: 230.892 ms | Load Imbalance: 1.068' [0m
+			|--[91m 'output_linear GRAD_W | Max Time: 12.105 ms | Avg Time: 8.939 ms | Load Imbalance: 1.354' [0m
+			|--[91m 'input_linear GRAD_W | Max Time: 7.136 ms | Avg Time: 5.905 ms | Load Imbalance: 1.209' [0m
+		|--[96m 'gcn conv bwd | Max Time: 679.935 ms | Avg Time: 637.150 ms | Load Imbalance: 1.067' [0m
+			|--[91m 'gather | Max Time: 115.516 ms | Avg Time: 98.110 ms | Load Imbalance: 1.177' [0m
+			|--[91m 'GRAD_AGG = GRAD_OUT * W.T | Max Time: 23.815 ms | Avg Time: 21.942 ms | Load Imbalance: 1.085' [0m
+			|--[91m 'all-reduce | Max Time: 297.520 ms | Avg Time: 238.186 ms | Load Imbalance: 1.249' [0m
+			|--[91m 'GRAD_W = AGG.T * GRAD_OUT | Max Time: 24.057 ms | Avg Time: 20.311 ms | Load Imbalance: 1.184' [0m
+			|--[91m 'ReduceScatter grad_weight | Max Time: 115.101 ms | Avg Time: 107.486 ms | Load Imbalance: 1.071' [0m
+				|--[95m 'reduce-scatter | Max Time: 104.707 ms | Avg Time: 97.571 ms | Load Imbalance: 1.073' [0m
+					|--[92m 'reduce-scatter-dist | Max Time: 96.586 ms | Avg Time: 87.270 ms | Load Imbalance: 1.107' [0m
+			|--[91m 'GRAD_H = A.T * GRAD_AGG | Max Time: 35.301 ms | Avg Time: 31.718 ms | Load Imbalance: 1.113' [0m
+			|--[91m 'allreduce grad_x | Max Time: 74.031 ms | Avg Time: 70.004 ms | Load Imbalance: 1.058' [0m
+				|--[95m 'all-reduce | Max Time: 66.168 ms | Avg Time: 60.307 ms | Load Imbalance: 1.097' [0m
+		|--[96m 'sync_norm_gradients | Max Time: 90.818 ms | Avg Time: 80.609 ms | Load Imbalance: 1.127' [0m
+		|--[96m 'sync_data_parallel_gradients | Max Time: 2.015 ms | Avg Time: 1.537 ms | Load Imbalance: 1.311' [0m
+
+|--[95m 'epoch 1 | Max Time: 3568.766 ms | Avg Time: 3568.444 ms | Load Imbalance: 1.000' [0m
+	|--[92m 'prefetch launch | Max Time: 7.184 ms | Avg Time: 7.044 ms | Load Imbalance: 1.020' [0m
+	|--[92m 'prefetch wait | Max Time: 428.947 ms | Avg Time: 416.710 ms | Load Imbalance: 1.029' [0m
+	|--[92m 'train step | Max Time: 3100.265 ms | Avg Time: 3093.773 ms | Load Imbalance: 1.002' [0m
+		|--[96m 'input_linear | Max Time: 362.463 ms | Avg Time: 354.101 ms | Load Imbalance: 1.024' [0m
+			|--[91m 'input_linear X * W | Max Time: 23.389 ms | Avg Time: 21.900 ms | Load Imbalance: 1.068' [0m
+			|--[91m 'all-reduce | Max Time: 299.836 ms | Avg Time: 291.069 ms | Load Imbalance: 1.030' [0m
+			|--[91m 'OUT + BIAS | Max Time: 8.532 ms | Avg Time: 8.311 ms | Load Imbalance: 1.027' [0m
+		|--[96m 'gcn conv fwd | Max Time: 785.069 ms | Avg Time: 744.357 ms | Load Imbalance: 1.055' [0m
+			|--[91m 'AGG = A * H | Max Time: 40.093 ms | Avg Time: 38.487 ms | Load Imbalance: 1.042' [0m
+			|--[91m 'allreduce H | Max Time: 287.823 ms | Avg Time: 218.552 ms | Load Imbalance: 1.317' [0m
+				|--[95m 'all-reduce | Max Time: 271.483 ms | Avg Time: 202.137 ms | Load Imbalance: 1.343' [0m
+			|--[91m 'Allgather W | Max Time: 262.341 ms | Avg Time: 210.793 ms | Load Imbalance: 1.245' [0m
+				|--[95m 'gather | Max Time: 249.160 ms | Avg Time: 197.498 ms | Load Imbalance: 1.262' [0m
+			|--[91m 'OUT = AGG * W | Max Time: 24.842 ms | Avg Time: 22.605 ms | Load Imbalance: 1.099' [0m
+			|--[91m 'allreduce Q | Max Time: 212.766 ms | Avg Time: 157.529 ms | Load Imbalance: 1.351' [0m
+				|--[95m 'all-reduce | Max Time: 198.004 ms | Avg Time: 143.289 ms | Load Imbalance: 1.382' [0m
+		|--[96m 'activation | Max Time: 279.248 ms | Avg Time: 242.604 ms | Load Imbalance: 1.151' [0m
+			|--[91m 'all-reduce | Max Time: 198.940 ms | Avg Time: 156.054 ms | Load Imbalance: 1.275' [0m
+		|--[96m 'output_linear | Max Time: 34.999 ms | Avg Time: 31.942 ms | Load Imbalance: 1.096' [0m
+			|--[91m 'output_linear X * W | Max Time: 10.585 ms | Avg Time: 9.733 ms | Load Imbalance: 1.088' [0m
+			|--[91m 'all-reduce | Max Time: 2.971 ms | Avg Time: 2.747 ms | Load Imbalance: 1.081' [0m
+			|--[91m 'OUT + BIAS | Max Time: 6.265 ms | Avg Time: 5.700 ms | Load Imbalance: 1.099' [0m
+		|--[96m 'bce fwd | Max Time: 288.766 ms | Avg Time: 286.964 ms | Load Imbalance: 1.006' [0m
+		|--[96m 'bce bwd | Max Time: 11.147 ms | Avg Time: 10.254 ms | Load Imbalance: 1.087' [0m
+		|--[96m 'linear_3d_bwd | Max Time: 388.631 ms | Avg Time: 330.242 ms | Load Imbalance: 1.177' [0m
+			|--[91m 'output_linear GRAD_X | Max Time: 8.412 ms | Avg Time: 7.640 ms | Load Imbalance: 1.101' [0m
+			|--[91m 'all-reduce | Max Time: 313.671 ms | Avg Time: 241.146 ms | Load Imbalance: 1.301' [0m
+			|--[91m 'output_linear GRAD_W | Max Time: 12.219 ms | Avg Time: 10.771 ms | Load Imbalance: 1.134' [0m
+			|--[91m 'input_linear GRAD_W | Max Time: 7.101 ms | Avg Time: 6.788 ms | Load Imbalance: 1.046' [0m
+		|--[96m 'gcn conv bwd | Max Time: 794.142 ms | Avg Time: 737.941 ms | Load Imbalance: 1.076' [0m
+			|--[91m 'gather | Max Time: 230.528 ms | Avg Time: 155.099 ms | Load Imbalance: 1.486' [0m
+			|--[91m 'GRAD_AGG = GRAD_OUT * W.T | Max Time: 22.863 ms | Avg Time: 21.927 ms | Load Imbalance: 1.043' [0m
+			|--[91m 'all-reduce | Max Time: 355.575 ms | Avg Time: 244.067 ms | Load Imbalance: 1.457' [0m
+			|--[91m 'GRAD_W = AGG.T * GRAD_OUT | Max Time: 23.295 ms | Avg Time: 21.819 ms | Load Imbalance: 1.068' [0m
+			|--[91m 'ReduceScatter grad_weight | Max Time: 118.023 ms | Avg Time: 113.812 ms | Load Imbalance: 1.037' [0m
+				|--[95m 'reduce-scatter | Max Time: 107.497 ms | Avg Time: 103.058 ms | Load Imbalance: 1.043' [0m
+					|--[92m 'reduce-scatter-dist | Max Time: 96.743 ms | Avg Time: 91.890 ms | Load Imbalance: 1.053' [0m
+			|--[91m 'GRAD_H = A.T * GRAD_AGG | Max Time: 31.395 ms | Avg Time: 29.252 ms | Load Imbalance: 1.073' [0m
+			|--[91m 'allreduce grad_x | Max Time: 79.505 ms | Avg Time: 75.515 ms | Load Imbalance: 1.053' [0m
+				|--[95m 'all-reduce | Max Time: 70.008 ms | Avg Time: 65.089 ms | Load Imbalance: 1.076' [0m
+		|--[96m 'sync_norm_gradients | Max Time: 76.195 ms | Avg Time: 72.638 ms | Load Imbalance: 1.049' [0m
+		|--[96m 'sync_data_parallel_gradients | Max Time: 1.851 ms | Avg Time: 1.680 ms | Load Imbalance: 1.102' [0m
+
+|--[95m 'epoch 2 | Max Time: 3215.744 ms | Avg Time: 3215.716 ms | Load Imbalance: 1.000' [0m
+	|--[92m 'prefetch launch | Max Time: 7.188 ms | Avg Time: 7.117 ms | Load Imbalance: 1.010' [0m
+	|--[92m 'prefetch wait | Max Time: 405.639 ms | Avg Time: 391.052 ms | Load Imbalance: 1.037' [0m
+	|--[92m 'train step | Max Time: 2781.854 ms | Avg Time: 2765.890 ms | Load Imbalance: 1.006' [0m
+		|--[96m 'input_linear | Max Time: 443.714 ms | Avg Time: 429.891 ms | Load Imbalance: 1.032' [0m
+			|--[91m 'input_linear X * W | Max Time: 22.119 ms | Avg Time: 21.478 ms | Load Imbalance: 1.030' [0m
+			|--[91m 'all-reduce | Max Time: 380.184 ms | Avg Time: 367.509 ms | Load Imbalance: 1.034' [0m
+			|--[91m 'OUT + BIAS | Max Time: 8.443 ms | Avg Time: 8.275 ms | Load Imbalance: 1.020' [0m
+		|--[96m 'gcn conv fwd | Max Time: 558.131 ms | Avg Time: 555.987 ms | Load Imbalance: 1.004' [0m
+			|--[91m 'AGG = A * H | Max Time: 40.560 ms | Avg Time: 39.817 ms | Load Imbalance: 1.019' [0m
+			|--[91m 'allreduce H | Max Time: 157.075 ms | Avg Time: 154.169 ms | Load Imbalance: 1.019' [0m
+				|--[95m 'all-reduce | Max Time: 139.471 ms | Avg Time: 136.525 ms | Load Imbalance: 1.022' [0m
+			|--[91m 'Allgather W | Max Time: 161.653 ms | Avg Time: 159.563 ms | Load Imbalance: 1.013' [0m
+				|--[95m 'gather | Max Time: 146.608 ms | Avg Time: 144.522 ms | Load Imbalance: 1.014' [0m
+			|--[91m 'OUT = AGG * W | Max Time: 25.959 ms | Avg Time: 25.308 ms | Load Imbalance: 1.026' [0m
+			|--[91m 'allreduce Q | Max Time: 121.467 ms | Avg Time: 119.459 ms | Load Imbalance: 1.017' [0m
+				|--[95m 'all-reduce | Max Time: 105.331 ms | Avg Time: 103.351 ms | Load Imbalance: 1.019' [0m
+		|--[96m 'activation | Max Time: 219.255 ms | Avg Time: 216.050 ms | Load Imbalance: 1.015' [0m
+			|--[91m 'all-reduce | Max Time: 120.145 ms | Avg Time: 118.439 ms | Load Imbalance: 1.014' [0m
+		|--[96m 'output_linear | Max Time: 36.393 ms | Avg Time: 35.818 ms | Load Imbalance: 1.016' [0m
+			|--[91m 'output_linear X * W | Max Time: 11.123 ms | Avg Time: 10.783 ms | Load Imbalance: 1.032' [0m
+			|--[91m 'all-reduce | Max Time: 3.157 ms | Avg Time: 2.953 ms | Load Imbalance: 1.069' [0m
+			|--[91m 'OUT + BIAS | Max Time: 6.535 ms | Avg Time: 6.367 ms | Load Imbalance: 1.026' [0m
+		|--[96m 'bce fwd | Max Time: 272.313 ms | Avg Time: 268.833 ms | Load Imbalance: 1.013' [0m
+		|--[96m 'bce bwd | Max Time: 11.641 ms | Avg Time: 11.281 ms | Load Imbalance: 1.032' [0m
+		|--[96m 'linear_3d_bwd | Max Time: 291.828 ms | Avg Time: 286.845 ms | Load Imbalance: 1.017' [0m
+			|--[91m 'output_linear GRAD_X | Max Time: 9.092 ms | Avg Time: 8.568 ms | Load Imbalance: 1.061' [0m
+			|--[91m 'all-reduce | Max Time: 216.209 ms | Avg Time: 211.593 ms | Load Imbalance: 1.022' [0m
+			|--[91m 'output_linear GRAD_W | Max Time: 12.642 ms | Avg Time: 12.169 ms | Load Imbalance: 1.039' [0m
+			|--[91m 'input_linear GRAD_W | Max Time: 7.462 ms | Avg Time: 7.319 ms | Load Imbalance: 1.019' [0m
+		|--[96m 'gcn conv bwd | Max Time: 593.780 ms | Avg Time: 590.599 ms | Load Imbalance: 1.005' [0m
+			|--[91m 'gather | Max Time: 158.349 ms | Avg Time: 155.853 ms | Load Imbalance: 1.016' [0m
+			|--[91m 'GRAD_AGG = GRAD_OUT * W.T | Max Time: 23.668 ms | Avg Time: 23.128 ms | Load Imbalance: 1.023' [0m
+			|--[91m 'all-reduce | Max Time: 104.430 ms | Avg Time: 97.080 ms | Load Imbalance: 1.076' [0m
+			|--[91m 'GRAD_W = AGG.T * GRAD_OUT | Max Time: 24.763 ms | Avg Time: 23.779 ms | Load Imbalance: 1.041' [0m
+			|--[91m 'ReduceScatter grad_weight | Max Time: 123.539 ms | Avg Time: 121.238 ms | Load Imbalance: 1.019' [0m
+				|--[95m 'reduce-scatter | Max Time: 110.619 ms | Avg Time: 109.325 ms | Load Imbalance: 1.012' [0m
+					|--[92m 'reduce-scatter-dist | Max Time: 98.149 ms | Avg Time: 96.986 ms | Load Imbalance: 1.012' [0m
+			|--[91m 'GRAD_H = A.T * GRAD_AGG | Max Time: 31.963 ms | Avg Time: 30.355 ms | Load Imbalance: 1.053' [0m
+			|--[91m 'allreduce grad_x | Max Time: 84.090 ms | Avg Time: 80.121 ms | Load Imbalance: 1.050' [0m
+				|--[95m 'all-reduce | Max Time: 74.035 ms | Avg Time: 69.267 ms | Load Imbalance: 1.069' [0m
+		|--[96m 'sync_norm_gradients | Max Time: 66.797 ms | Avg Time: 65.413 ms | Load Imbalance: 1.021' [0m
+		|--[96m 'sync_data_parallel_gradients | Max Time: 2.026 ms | Avg Time: 1.899 ms | Load Imbalance: 1.067' [0m
+
+Epoch: 002, Train Loss: 0.3077
+Epoch: 003, Train Loss: 0.3063
+Epoch: 004, Train Loss: 0.3059
+/pscratch/sd/c/cunyang/gnn/plexus_env/lib/python3.11/site-packages/torchdata/datapipes/__init__.py:18: UserWarning: 
+################################################################################
+WARNING!
+The 'datapipes', 'dataloader2' modules are deprecated and will be removed in a
+future torchdata release! Please see https://github.com/pytorch/data/issues/1196
+to learn more and leave feedback.
+################################################################################
+
+  deprecation_warning()
+/pscratch/sd/c/cunyang/gnn/plexus_env/lib/python3.11/site-packages/torchdata/datapipes/__init__.py:18: UserWarning: 
+################################################################################
+WARNING!
+The 'datapipes', 'dataloader2' modules are deprecated and will be removed in a
+future torchdata release! Please see https://github.com/pytorch/data/issues/1196
+to learn more and leave feedback.
+################################################################################
+
+  deprecation_warning()
+/pscratch/sd/c/cunyang/gnn/plexus_env/lib/python3.11/site-packages/torchdata/datapipes/__init__.py:18: UserWarning: 
+################################################################################
+WARNING!
+The 'datapipes', 'dataloader2' modules are deprecated and will be removed in a
+future torchdata release! Please see https://github.com/pytorch/data/issues/1196
+to learn more and leave feedback.
+################################################################################
+
+  deprecation_warning()
+/pscratch/sd/c/cunyang/gnn/plexus_env/lib/python3.11/site-packages/torchdata/datapipes/__init__.py:18: UserWarning: 
+################################################################################
+WARNING!
+The 'datapipes', 'dataloader2' modules are deprecated and will be removed in a
+future torchdata release! Please see https://github.com/pytorch/data/issues/1196
+to learn more and leave feedback.
+################################################################################
+
+  deprecation_warning()
+/pscratch/sd/c/cunyang/gnn/plexus_env/lib/python3.11/site-packages/dgl/distributed/dist_graph.py:11: RuntimeWarning: GraphBolt is unavailable and has been disabled. Set DGL_DISABLE_GRAPHBOLT=1 to silence this warning. (Cannot find DGL C++ graphbolt library at /pscratch/sd/c/cunyang/gnn/plexus_env/lib/python3.11/site-packages/dgl/graphbolt/libgraphbolt_pytorch_2.8.0.so)
+  from .. import backend as F, graphbolt as gb, heterograph_index
+/pscratch/sd/c/cunyang/gnn/plexus_env/lib/python3.11/site-packages/dgl/distributed/dist_graph.py:11: RuntimeWarning: GraphBolt is unavailable and has been disabled. Set DGL_DISABLE_GRAPHBOLT=1 to silence this warning. (Cannot find DGL C++ graphbolt library at /pscratch/sd/c/cunyang/gnn/plexus_env/lib/python3.11/site-packages/dgl/graphbolt/libgraphbolt_pytorch_2.8.0.so)
+  from .. import backend as F, graphbolt as gb, heterograph_index
+/pscratch/sd/c/cunyang/gnn/plexus_env/lib/python3.11/site-packages/dgl/distributed/dist_graph.py:11: RuntimeWarning: GraphBolt is unavailable and has been disabled. Set DGL_DISABLE_GRAPHBOLT=1 to silence this warning. (Cannot find DGL C++ graphbolt library at /pscratch/sd/c/cunyang/gnn/plexus_env/lib/python3.11/site-packages/dgl/graphbolt/libgraphbolt_pytorch_2.8.0.so)
+  from .. import backend as F, graphbolt as gb, heterograph_index
+/pscratch/sd/c/cunyang/gnn/plexus_env/lib/python3.11/site-packages/dgl/distributed/dist_graph.py:11: RuntimeWarning: GraphBolt is unavailable and has been disabled. Set DGL_DISABLE_GRAPHBOLT=1 to silence this warning. (Cannot find DGL C++ graphbolt library at /pscratch/sd/c/cunyang/gnn/plexus_env/lib/python3.11/site-packages/dgl/graphbolt/libgraphbolt_pytorch_2.8.0.so)
+  from .. import backend as F, graphbolt as gb, heterograph_index
+TRAIN: rocauc 0.7550
+VAL: rocauc 0.7373
+TEST: rocauc 0.6143
+Epoch: 005, Train Loss: 0.3057
+Epoch: 006, Train Loss: 0.3032
+Epoch: 007, Train Loss: 0.3030
+Epoch: 008, Train Loss: 0.3033
+Epoch: 009, Train Loss: 0.3016
+TRAIN: rocauc 0.7651
+VAL: rocauc 0.7260
+TEST: rocauc 0.6013
+Epoch: 010, Train Loss: 0.3014
+Epoch: 011, Train Loss: 0.3007
+Epoch: 012, Train Loss: 0.3017
+Epoch: 013, Train Loss: 0.2989
+Epoch: 014, Train Loss: 0.2985
+TRAIN: rocauc 0.7646
+VAL: rocauc 0.7202
+TEST: rocauc 0.5916
+Epoch: 015, Train Loss: 0.3000
+Epoch: 016, Train Loss: 0.2991
+Epoch: 017, Train Loss: 0.2987
+Epoch: 018, Train Loss: 0.2977
+Epoch: 019, Train Loss: 0.2994
+TRAIN: rocauc 0.7745
+VAL: rocauc 0.7444
+TEST: rocauc 0.6575
+Epoch: 020, Train Loss: 0.2967
+Epoch: 021, Train Loss: 0.2996
+Epoch: 022, Train Loss: 0.2980
+Epoch: 023, Train Loss: 0.2973
+Epoch: 024, Train Loss: 0.2963
+TRAIN: rocauc 0.7696
+VAL: rocauc 0.7341
+TEST: rocauc 0.6452
+Epoch: 025, Train Loss: 0.2965
+Epoch: 026, Train Loss: 0.2977
+Epoch: 027, Train Loss: 0.2959
+Epoch: 028, Train Loss: 0.2978
+Epoch: 029, Train Loss: 0.2958
+TRAIN: rocauc 0.7785
+VAL: rocauc 0.7218
+TEST: rocauc 0.6669
+Epoch: 030, Train Loss: 0.2972
+Epoch: 031, Train Loss: 0.2966
+Epoch: 032, Train Loss: 0.2969
+Epoch: 033, Train Loss: 0.2959
+Epoch: 034, Train Loss: 0.2950
+TRAIN: rocauc 0.7763
+VAL: rocauc 0.7171
+TEST: rocauc 0.6094
+Epoch: 035, Train Loss: 0.2948
+Epoch: 036, Train Loss: 0.2948
+Epoch: 037, Train Loss: 0.2953
+Epoch: 038, Train Loss: 0.2947
+Epoch: 039, Train Loss: 0.2950
+TRAIN: rocauc 0.7817
+VAL: rocauc 0.7359
+TEST: rocauc 0.6714
+Epoch: 040, Train Loss: 0.2943
+Epoch: 041, Train Loss: 0.2944
+Epoch: 042, Train Loss: 0.2935
+Epoch: 043, Train Loss: 0.2937
+Epoch: 044, Train Loss: 0.2951
+TRAIN: rocauc 0.7800
+VAL: rocauc 0.7302
+TEST: rocauc 0.6695
+Epoch: 045, Train Loss: 0.2954
+Epoch: 046, Train Loss: 0.2936
+Epoch: 047, Train Loss: 0.2961
+Epoch: 048, Train Loss: 0.2949
+Epoch: 049, Train Loss: 0.2936
+TRAIN: rocauc 0.7777
+VAL: rocauc 0.7262
+TEST: rocauc 0.6988
+Epoch: 050, Train Loss: 0.2938
+Epoch: 051, Train Loss: 0.2939
+Epoch: 052, Train Loss: 0.2927
+Epoch: 053, Train Loss: 0.2931
+Epoch: 054, Train Loss: 0.2949
+TRAIN: rocauc 0.7797
+VAL: rocauc 0.7274
+TEST: rocauc 0.6733
+Epoch: 055, Train Loss: 0.2947
+Epoch: 056, Train Loss: 0.2930
+Epoch: 057, Train Loss: 0.2928
+Epoch: 058, Train Loss: 0.2950
+Epoch: 059, Train Loss: 0.2934
+TRAIN: rocauc 0.7791
+VAL: rocauc 0.7465
+TEST: rocauc 0.6967
+Epoch: 060, Train Loss: 0.2937
+Epoch: 061, Train Loss: 0.2924
+Epoch: 062, Train Loss: 0.2916
+Epoch: 063, Train Loss: 0.2928
+Epoch: 064, Train Loss: 0.2925
+TRAIN: rocauc 0.7851
+VAL: rocauc 0.7487
+TEST: rocauc 0.6977
+Epoch: 065, Train Loss: 0.2919
+Epoch: 066, Train Loss: 0.2941
+Epoch: 067, Train Loss: 0.2915
+Epoch: 068, Train Loss: 0.2914
+Epoch: 069, Train Loss: 0.2923
+TRAIN: rocauc 0.7743
+VAL: rocauc 0.7209
+TEST: rocauc 0.6742
+Epoch: 070, Train Loss: 0.2926
+Epoch: 071, Train Loss: 0.2913
+Epoch: 072, Train Loss: 0.2927
+Epoch: 073, Train Loss: 0.2907
+Epoch: 074, Train Loss: 0.2919
+TRAIN: rocauc 0.7866
+VAL: rocauc 0.7538
+TEST: rocauc 0.7089
+Epoch: 075, Train Loss: 0.2918
+Epoch: 076, Train Loss: 0.2930
+Epoch: 077, Train Loss: 0.2926
+Epoch: 078, Train Loss: 0.2924
+Epoch: 079, Train Loss: 0.2914
+TRAIN: rocauc 0.7864
+VAL: rocauc 0.7489
+TEST: rocauc 0.6945
+Epoch: 080, Train Loss: 0.2919
+Epoch: 081, Train Loss: 0.2896
+Epoch: 082, Train Loss: 0.2917
+Epoch: 083, Train Loss: 0.2896
+Epoch: 084, Train Loss: 0.2911
+TRAIN: rocauc 0.7824
+VAL: rocauc 0.7568
+TEST: rocauc 0.7161
+Epoch: 085, Train Loss: 0.2900
+Epoch: 086, Train Loss: 0.2911
+Epoch: 087, Train Loss: 0.2911
+Epoch: 088, Train Loss: 0.2910
+Epoch: 089, Train Loss: 0.2926
+TRAIN: rocauc 0.7809
+VAL: rocauc 0.7602
+TEST: rocauc 0.7012
+Epoch: 090, Train Loss: 0.2920
+Epoch: 091, Train Loss: 0.2911
+Epoch: 092, Train Loss: 0.2901
+Epoch: 093, Train Loss: 0.2898
+Epoch: 094, Train Loss: 0.2901
+TRAIN: rocauc 0.7863
+VAL: rocauc 0.7444
+TEST: rocauc 0.6917
+Epoch: 095, Train Loss: 0.2893
+Epoch: 096, Train Loss: 0.2906
+Epoch: 097, Train Loss: 0.2897
+Epoch: 098, Train Loss: 0.2922
+Epoch: 099, Train Loss: 0.2911
+TRAIN: rocauc 0.7825
+VAL: rocauc 0.7417
+TEST: rocauc 0.6890
+Epoch: 100, Train Loss: 0.2886
+Epoch: 101, Train Loss: 0.2885
+Epoch: 102, Train Loss: 0.2916
+Epoch: 103, Train Loss: 0.2892
+Epoch: 104, Train Loss: 0.2897
+TRAIN: rocauc 0.7791
+VAL: rocauc 0.7339
+TEST: rocauc 0.6863
+Epoch: 105, Train Loss: 0.2917
+Epoch: 106, Train Loss: 0.2886
+Epoch: 107, Train Loss: 0.2905
+Epoch: 108, Train Loss: 0.2904
+Epoch: 109, Train Loss: 0.2925
+TRAIN: rocauc 0.7843
+VAL: rocauc 0.7467
+TEST: rocauc 0.6859
+Epoch: 110, Train Loss: 0.2903
+Epoch: 111, Train Loss: 0.2892
+Epoch: 112, Train Loss: 0.2883
+Epoch: 113, Train Loss: 0.2898
+Epoch: 114, Train Loss: 0.2893
+TRAIN: rocauc 0.7860
+VAL: rocauc 0.7439
+TEST: rocauc 0.6728
+Epoch: 115, Train Loss: 0.2905
+Epoch: 116, Train Loss: 0.2898
+Epoch: 117, Train Loss: 0.2880
+Epoch: 118, Train Loss: 0.2894
+Epoch: 119, Train Loss: 0.2900
+TRAIN: rocauc 0.7867
+VAL: rocauc 0.7448
+TEST: rocauc 0.6967
+Epoch: 120, Train Loss: 0.2896
+Epoch: 121, Train Loss: 0.2897
+Epoch: 122, Train Loss: 0.2884
+Epoch: 123, Train Loss: 0.2895
+Epoch: 124, Train Loss: 0.2883
+TRAIN: rocauc 0.7844
+VAL: rocauc 0.7535
+TEST: rocauc 0.7071
+Epoch: 125, Train Loss: 0.2884
+Epoch: 126, Train Loss: 0.2875
+Epoch: 127, Train Loss: 0.2885
+Epoch: 128, Train Loss: 0.2884
+Epoch: 129, Train Loss: 0.2890
+TRAIN: rocauc 0.7836
+VAL: rocauc 0.7396
+TEST: rocauc 0.6930
+Epoch: 130, Train Loss: 0.2874
+Epoch: 131, Train Loss: 0.2876
+Epoch: 132, Train Loss: 0.2883
+Epoch: 133, Train Loss: 0.2878
+Epoch: 134, Train Loss: 0.2887
+TRAIN: rocauc 0.7887
+VAL: rocauc 0.7364
+TEST: rocauc 0.7092
+Epoch: 135, Train Loss: 0.2889
+Epoch: 136, Train Loss: 0.2885
+Epoch: 137, Train Loss: 0.2894
+Epoch: 138, Train Loss: 0.2893
+Epoch: 139, Train Loss: 0.2878
+TRAIN: rocauc 0.7836
+VAL: rocauc 0.7411
+TEST: rocauc 0.6967
+Epoch: 140, Train Loss: 0.2867
+Epoch: 141, Train Loss: 0.2898
+Epoch: 142, Train Loss: 0.2879
+Epoch: 143, Train Loss: 0.2878
+Epoch: 144, Train Loss: 0.2884
+TRAIN: rocauc 0.7812
+VAL: rocauc 0.7283
+TEST: rocauc 0.7031
+Epoch: 145, Train Loss: 0.2889
+Epoch: 146, Train Loss: 0.2879
+Epoch: 147, Train Loss: 0.2886
+Epoch: 148, Train Loss: 0.2875
+Epoch: 149, Train Loss: 0.2873
+TRAIN: rocauc 0.7893
+VAL: rocauc 0.7480
+TEST: rocauc 0.7075
+Epoch: 150, Train Loss: 0.2873
+Epoch: 151, Train Loss: 0.2889
+Epoch: 152, Train Loss: 0.2881
+Epoch: 153, Train Loss: 0.2880
+Epoch: 154, Train Loss: 0.2879
+TRAIN: rocauc 0.7845
+VAL: rocauc 0.7485
+TEST: rocauc 0.7119
+Epoch: 155, Train Loss: 0.2871
+Epoch: 156, Train Loss: 0.2892
+Epoch: 157, Train Loss: 0.2870
+Epoch: 158, Train Loss: 0.2882
+Epoch: 159, Train Loss: 0.2877
+TRAIN: rocauc 0.7840
+VAL: rocauc 0.7377
+TEST: rocauc 0.7122
+Epoch: 160, Train Loss: 0.2865
+Epoch: 161, Train Loss: 0.2867
+Epoch: 162, Train Loss: 0.2877
+Epoch: 163, Train Loss: 0.2878
+Epoch: 164, Train Loss: 0.2897
+TRAIN: rocauc 0.7855
+VAL: rocauc 0.7491
+TEST: rocauc 0.6958
+Epoch: 165, Train Loss: 0.2887
+Epoch: 166, Train Loss: 0.2855
+Epoch: 167, Train Loss: 0.2868
+Epoch: 168, Train Loss: 0.2888
+Epoch: 169, Train Loss: 0.2884
+TRAIN: rocauc 0.7848
+VAL: rocauc 0.7393
+TEST: rocauc 0.6939
+Epoch: 170, Train Loss: 0.2866
+Epoch: 171, Train Loss: 0.2866
+Epoch: 172, Train Loss: 0.2865
+Epoch: 173, Train Loss: 0.2873
+Epoch: 174, Train Loss: 0.2870
+TRAIN: rocauc 0.7873
+VAL: rocauc 0.7424
+TEST: rocauc 0.7018
+Epoch: 175, Train Loss: 0.2873
+Epoch: 176, Train Loss: 0.2870
+Epoch: 177, Train Loss: 0.2878
+Epoch: 178, Train Loss: 0.2866
+Epoch: 179, Train Loss: 0.2870
+TRAIN: rocauc 0.7884
+VAL: rocauc 0.7451
+TEST: rocauc 0.6963
+Epoch: 180, Train Loss: 0.2849
+Epoch: 181, Train Loss: 0.2872
+Epoch: 182, Train Loss: 0.2868
+Epoch: 183, Train Loss: 0.2870
+Epoch: 184, Train Loss: 0.2871
+TRAIN: rocauc 0.7883
+VAL: rocauc 0.7490
+TEST: rocauc 0.7112
+Epoch: 185, Train Loss: 0.2855
+Epoch: 186, Train Loss: 0.2868
+Epoch: 187, Train Loss: 0.2869
+Epoch: 188, Train Loss: 0.2876
+Epoch: 189, Train Loss: 0.2865
+TRAIN: rocauc 0.7859
+VAL: rocauc 0.7252
+TEST: rocauc 0.7148
+Epoch: 190, Train Loss: 0.2865
+Epoch: 191, Train Loss: 0.2869
+Epoch: 192, Train Loss: 0.2860
+Epoch: 193, Train Loss: 0.2883
+Epoch: 194, Train Loss: 0.2871
+TRAIN: rocauc 0.7846
+VAL: rocauc 0.7328
+TEST: rocauc 0.7088
+Epoch: 195, Train Loss: 0.2864
+Epoch: 196, Train Loss: 0.2866
+Epoch: 197, Train Loss: 0.2873
+Epoch: 198, Train Loss: 0.2885
+Epoch: 199, Train Loss: 0.2850
+TRAIN: rocauc 0.7837
+VAL: rocauc 0.7409
+TEST: rocauc 0.7137
+Epoch: 200, Train Loss: 0.2858
+Epoch: 201, Train Loss: 0.2865
+Epoch: 202, Train Loss: 0.2856
+Epoch: 203, Train Loss: 0.2872
+Epoch: 204, Train Loss: 0.2847
+TRAIN: rocauc 0.7820
+VAL: rocauc 0.7213
+TEST: rocauc 0.6950
+Epoch: 205, Train Loss: 0.2843
+Epoch: 206, Train Loss: 0.2864
+Epoch: 207, Train Loss: 0.2861
+Epoch: 208, Train Loss: 0.2854
+Epoch: 209, Train Loss: 0.2859
+TRAIN: rocauc 0.7876
+VAL: rocauc 0.7397
+TEST: rocauc 0.7008
+Epoch: 210, Train Loss: 0.2865
+Epoch: 211, Train Loss: 0.2855
+Epoch: 212, Train Loss: 0.2875
+Epoch: 213, Train Loss: 0.2872
+Epoch: 214, Train Loss: 0.2856
+TRAIN: rocauc 0.7836
+VAL: rocauc 0.7328
+TEST: rocauc 0.7073
+Epoch: 215, Train Loss: 0.2862
+Epoch: 216, Train Loss: 0.2860
+Epoch: 217, Train Loss: 0.2866
+Epoch: 218, Train Loss: 0.2869
+Epoch: 219, Train Loss: 0.2865
+TRAIN: rocauc 0.7862
+VAL: rocauc 0.7316
+TEST: rocauc 0.7169
+Epoch: 220, Train Loss: 0.2857
+Epoch: 221, Train Loss: 0.2865
+Epoch: 222, Train Loss: 0.2858
+Epoch: 223, Train Loss: 0.2861
+Epoch: 224, Train Loss: 0.2869
+TRAIN: rocauc 0.7850
+VAL: rocauc 0.7317
+TEST: rocauc 0.7070
+Epoch: 225, Train Loss: 0.2859
+Epoch: 226, Train Loss: 0.2852
+Epoch: 227, Train Loss: 0.2840
+Epoch: 228, Train Loss: 0.2852
+Epoch: 229, Train Loss: 0.2852
+TRAIN: rocauc 0.7864
+VAL: rocauc 0.7420
+TEST: rocauc 0.7104
+Epoch: 230, Train Loss: 0.2866
+Epoch: 231, Train Loss: 0.2859
+Epoch: 232, Train Loss: 0.2847
+Epoch: 233, Train Loss: 0.2843
+Epoch: 234, Train Loss: 0.2854
+TRAIN: rocauc 0.7834
+VAL: rocauc 0.7214
+TEST: rocauc 0.6922
+Epoch: 235, Train Loss: 0.2849
+Epoch: 236, Train Loss: 0.2853
+Epoch: 237, Train Loss: 0.2859
+Epoch: 238, Train Loss: 0.2856
+Epoch: 239, Train Loss: 0.2857
+TRAIN: rocauc 0.7878
+VAL: rocauc 0.7323
+TEST: rocauc 0.6880
+Epoch: 240, Train Loss: 0.2851
+Epoch: 241, Train Loss: 0.2866
+Epoch: 242, Train Loss: 0.2870
+Epoch: 243, Train Loss: 0.2855
+Epoch: 244, Train Loss: 0.2845
+TRAIN: rocauc 0.7866
+VAL: rocauc 0.7451
+TEST: rocauc 0.6985
+Epoch: 245, Train Loss: 0.2847
+Epoch: 246, Train Loss: 0.2862
+Epoch: 247, Train Loss: 0.2846
+Epoch: 248, Train Loss: 0.2858
+Epoch: 249, Train Loss: 0.2851
+TRAIN: rocauc 0.7849
+VAL: rocauc 0.7323
+TEST: rocauc 0.7052
+Epoch: 250, Train Loss: 0.2845
+Epoch: 251, Train Loss: 0.2855
+Epoch: 252, Train Loss: 0.2852
+Epoch: 253, Train Loss: 0.2859
+Epoch: 254, Train Loss: 0.2840
+TRAIN: rocauc 0.7893
+VAL: rocauc 0.7406
+TEST: rocauc 0.7125
+Epoch: 255, Train Loss: 0.2845
+Epoch: 256, Train Loss: 0.2855
+Epoch: 257, Train Loss: 0.2855
+Epoch: 258, Train Loss: 0.2838
+Epoch: 259, Train Loss: 0.2842
+TRAIN: rocauc 0.7808
+VAL: rocauc 0.7549
+TEST: rocauc 0.7262
+Epoch: 260, Train Loss: 0.2848
+Epoch: 261, Train Loss: 0.2852
+Epoch: 262, Train Loss: 0.2844
+Epoch: 263, Train Loss: 0.2849
+Epoch: 264, Train Loss: 0.2848
+TRAIN: rocauc 0.7850
+VAL: rocauc 0.7263
+TEST: rocauc 0.6992
+Epoch: 265, Train Loss: 0.2847
+Epoch: 266, Train Loss: 0.2861
+Epoch: 267, Train Loss: 0.2851
+Epoch: 268, Train Loss: 0.2845
+Epoch: 269, Train Loss: 0.2840
+TRAIN: rocauc 0.7831
+VAL: rocauc 0.7381
+TEST: rocauc 0.7008
+Epoch: 270, Train Loss: 0.2827
+Epoch: 271, Train Loss: 0.2849
+Epoch: 272, Train Loss: 0.2858
+Epoch: 273, Train Loss: 0.2850
+Epoch: 274, Train Loss: 0.2851
+TRAIN: rocauc 0.7835
+VAL: rocauc 0.7456
+TEST: rocauc 0.6948
+Epoch: 275, Train Loss: 0.2833
+Epoch: 276, Train Loss: 0.2848
+Epoch: 277, Train Loss: 0.2846
+Epoch: 278, Train Loss: 0.2846
+Epoch: 279, Train Loss: 0.2843
+TRAIN: rocauc 0.7858
+VAL: rocauc 0.7278
+TEST: rocauc 0.7047
+Epoch: 280, Train Loss: 0.2855
+Epoch: 281, Train Loss: 0.2853
+Epoch: 282, Train Loss: 0.2851
+Epoch: 283, Train Loss: 0.2840
+Epoch: 284, Train Loss: 0.2851
+TRAIN: rocauc 0.7832
+VAL: rocauc 0.7209
+TEST: rocauc 0.6928
+Epoch: 285, Train Loss: 0.2840
+Epoch: 286, Train Loss: 0.2852
+Epoch: 287, Train Loss: 0.2856
+Epoch: 288, Train Loss: 0.2846
+Epoch: 289, Train Loss: 0.2856
+TRAIN: rocauc 0.7842
+VAL: rocauc 0.7248
+TEST: rocauc 0.6848
+Epoch: 290, Train Loss: 0.2837
+Epoch: 291, Train Loss: 0.2846
+Epoch: 292, Train Loss: 0.2836
+Epoch: 293, Train Loss: 0.2837
+Epoch: 294, Train Loss: 0.2849
+TRAIN: rocauc 0.7837
+VAL: rocauc 0.7347
+TEST: rocauc 0.6986
+Epoch: 295, Train Loss: 0.2846
+Epoch: 296, Train Loss: 0.2847
+Epoch: 297, Train Loss: 0.2848
+Epoch: 298, Train Loss: 0.2851
+Epoch: 299, Train Loss: 0.2847
+TRAIN: rocauc 0.7876
+VAL: rocauc 0.7549
+TEST: rocauc 0.7057
+Epoch: 300, Train Loss: 0.2836
+Epoch: 301, Train Loss: 0.2847
+Epoch: 302, Train Loss: 0.2841
+Epoch: 303, Train Loss: 0.2837
+Epoch: 304, Train Loss: 0.2830
+TRAIN: rocauc 0.7878
+VAL: rocauc 0.7434
+TEST: rocauc 0.6967
+Epoch: 305, Train Loss: 0.2834
+Epoch: 306, Train Loss: 0.2836
+Epoch: 307, Train Loss: 0.2837
+Epoch: 308, Train Loss: 0.2856
+Epoch: 309, Train Loss: 0.2843
+TRAIN: rocauc 0.7858
+VAL: rocauc 0.7433
+TEST: rocauc 0.6928
+Epoch: 310, Train Loss: 0.2852
+Epoch: 311, Train Loss: 0.2853
+Epoch: 312, Train Loss: 0.2841
+Epoch: 313, Train Loss: 0.2856
+Epoch: 314, Train Loss: 0.2828
+TRAIN: rocauc 0.7795
+VAL: rocauc 0.7377
+TEST: rocauc 0.7030
+Epoch: 315, Train Loss: 0.2839
+Epoch: 316, Train Loss: 0.2828
+Epoch: 317, Train Loss: 0.2842
+Epoch: 318, Train Loss: 0.2835
+Epoch: 319, Train Loss: 0.2833
+TRAIN: rocauc 0.7926
+VAL: rocauc 0.7512
+TEST: rocauc 0.7226
+Epoch: 320, Train Loss: 0.2831
+Epoch: 321, Train Loss: 0.2834
+Epoch: 322, Train Loss: 0.2836
+Epoch: 323, Train Loss: 0.2836
+Epoch: 324, Train Loss: 0.2834
+TRAIN: rocauc 0.7919
+VAL: rocauc 0.7577
+TEST: rocauc 0.7117
+Epoch: 325, Train Loss: 0.2841
+Epoch: 326, Train Loss: 0.2844
+Epoch: 327, Train Loss: 0.2844
+Epoch: 328, Train Loss: 0.2839
+Epoch: 329, Train Loss: 0.2833
+TRAIN: rocauc 0.7830
+VAL: rocauc 0.7315
+TEST: rocauc 0.6844
+Epoch: 330, Train Loss: 0.2834
+Epoch: 331, Train Loss: 0.2853
+Epoch: 332, Train Loss: 0.2826
+Epoch: 333, Train Loss: 0.2825
+Epoch: 334, Train Loss: 0.2827
+TRAIN: rocauc 0.7850
+VAL: rocauc 0.7394
+TEST: rocauc 0.7057
+Epoch: 335, Train Loss: 0.2842
+Epoch: 336, Train Loss: 0.2831
+Epoch: 337, Train Loss: 0.2832
+Epoch: 338, Train Loss: 0.2848
+Epoch: 339, Train Loss: 0.2837
+TRAIN: rocauc 0.7918
+VAL: rocauc 0.7617
+TEST: rocauc 0.7265
+Epoch: 340, Train Loss: 0.2835
+Epoch: 341, Train Loss: 0.2822
+Epoch: 342, Train Loss: 0.2846
+Epoch: 343, Train Loss: 0.2846
+Epoch: 344, Train Loss: 0.2832
+TRAIN: rocauc 0.7878
+VAL: rocauc 0.7503
+TEST: rocauc 0.7124
+Epoch: 345, Train Loss: 0.2845
+Epoch: 346, Train Loss: 0.2820
+Epoch: 347, Train Loss: 0.2840
+Epoch: 348, Train Loss: 0.2837
+Epoch: 349, Train Loss: 0.2830
+TRAIN: rocauc 0.7848
+VAL: rocauc 0.7414
+TEST: rocauc 0.6907
+Epoch: 350, Train Loss: 0.2836
+Epoch: 351, Train Loss: 0.2848
+Epoch: 352, Train Loss: 0.2833
+Epoch: 353, Train Loss: 0.2828
+Epoch: 354, Train Loss: 0.2832
+TRAIN: rocauc 0.7890
+VAL: rocauc 0.7388
+TEST: rocauc 0.6975
+Epoch: 355, Train Loss: 0.2836
+Epoch: 356, Train Loss: 0.2829
+Epoch: 357, Train Loss: 0.2839
+Epoch: 358, Train Loss: 0.2833
+Epoch: 359, Train Loss: 0.2830
+TRAIN: rocauc 0.7835
+VAL: rocauc 0.7380
+TEST: rocauc 0.6990
+Epoch: 360, Train Loss: 0.2823
+Epoch: 361, Train Loss: 0.2827
+Epoch: 362, Train Loss: 0.2819
+Epoch: 363, Train Loss: 0.2832
+Epoch: 364, Train Loss: 0.2818
+TRAIN: rocauc 0.7822
+VAL: rocauc 0.7472
+TEST: rocauc 0.7236
+Epoch: 365, Train Loss: 0.2826
+Epoch: 366, Train Loss: 0.2830
+Epoch: 367, Train Loss: 0.2833
+Epoch: 368, Train Loss: 0.2824
+Epoch: 369, Train Loss: 0.2848
+TRAIN: rocauc 0.7824
+VAL: rocauc 0.7431
+TEST: rocauc 0.7062
+Epoch: 370, Train Loss: 0.2840
+Epoch: 371, Train Loss: 0.2846
+Epoch: 372, Train Loss: 0.2826
+Epoch: 373, Train Loss: 0.2833
+Epoch: 374, Train Loss: 0.2830
+TRAIN: rocauc 0.7961
+VAL: rocauc 0.7558
+TEST: rocauc 0.7234
+Epoch: 375, Train Loss: 0.2843
+Epoch: 376, Train Loss: 0.2833
+Epoch: 377, Train Loss: 0.2827
+Epoch: 378, Train Loss: 0.2824
+Epoch: 379, Train Loss: 0.2843
+TRAIN: rocauc 0.7808
+VAL: rocauc 0.7386
+TEST: rocauc 0.7072
+Epoch: 380, Train Loss: 0.2828
+Epoch: 381, Train Loss: 0.2819
+Epoch: 382, Train Loss: 0.2841
+Epoch: 383, Train Loss: 0.2816
+Epoch: 384, Train Loss: 0.2831
+TRAIN: rocauc 0.7851
+VAL: rocauc 0.7381
+TEST: rocauc 0.6951
+Epoch: 385, Train Loss: 0.2825
+Epoch: 386, Train Loss: 0.2829
+Epoch: 387, Train Loss: 0.2833
+Epoch: 388, Train Loss: 0.2817
+Epoch: 389, Train Loss: 0.2828
+TRAIN: rocauc 0.7813
+VAL: rocauc 0.7296
+TEST: rocauc 0.7011
+Epoch: 390, Train Loss: 0.2826
+Epoch: 391, Train Loss: 0.2828
+Epoch: 392, Train Loss: 0.2829
+Epoch: 393, Train Loss: 0.2827
+Epoch: 394, Train Loss: 0.2810
+TRAIN: rocauc 0.7897
+VAL: rocauc 0.7474
+TEST: rocauc 0.7093
+Epoch: 395, Train Loss: 0.2819
+Epoch: 396, Train Loss: 0.2823
+Epoch: 397, Train Loss: 0.2820
+Epoch: 398, Train Loss: 0.2829
+Epoch: 399, Train Loss: 0.2825
+TRAIN: rocauc 0.7848
+VAL: rocauc 0.7313
+TEST: rocauc 0.6892
+Epoch: 400, Train Loss: 0.2832
+Epoch: 401, Train Loss: 0.2830
+Epoch: 402, Train Loss: 0.2839
+Epoch: 403, Train Loss: 0.2825
+Epoch: 404, Train Loss: 0.2825
+TRAIN: rocauc 0.7921
+VAL: rocauc 0.7220
+TEST: rocauc 0.6949
+Epoch: 405, Train Loss: 0.2824
+Epoch: 406, Train Loss: 0.2829
+Epoch: 407, Train Loss: 0.2822
+Epoch: 408, Train Loss: 0.2826
+Epoch: 409, Train Loss: 0.2831
+TRAIN: rocauc 0.7885
+VAL: rocauc 0.7432
+TEST: rocauc 0.7051
+Epoch: 410, Train Loss: 0.2818
+Epoch: 411, Train Loss: 0.2826
+Epoch: 412, Train Loss: 0.2829
+Epoch: 413, Train Loss: 0.2816
+Epoch: 414, Train Loss: 0.2817
+TRAIN: rocauc 0.7880
+VAL: rocauc 0.7210
+TEST: rocauc 0.6822
+Epoch: 415, Train Loss: 0.2823
+Epoch: 416, Train Loss: 0.2817
+Epoch: 417, Train Loss: 0.2830
+Epoch: 418, Train Loss: 0.2809
+Epoch: 419, Train Loss: 0.2810
+TRAIN: rocauc 0.7890
+VAL: rocauc 0.7416
+TEST: rocauc 0.6977
+Epoch: 420, Train Loss: 0.2812
+Epoch: 421, Train Loss: 0.2834
+Epoch: 422, Train Loss: 0.2824
+Epoch: 423, Train Loss: 0.2832
+Epoch: 424, Train Loss: 0.2817
+TRAIN: rocauc 0.7897
+VAL: rocauc 0.7437
+TEST: rocauc 0.7051
+Epoch: 425, Train Loss: 0.2822
+Epoch: 426, Train Loss: 0.2829
+Epoch: 427, Train Loss: 0.2815
+Epoch: 428, Train Loss: 0.2823
+Epoch: 429, Train Loss: 0.2824
+TRAIN: rocauc 0.7845
+VAL: rocauc 0.7232
+TEST: rocauc 0.6990
+Epoch: 430, Train Loss: 0.2814
+Epoch: 431, Train Loss: 0.2820
+Epoch: 432, Train Loss: 0.2813
+Epoch: 433, Train Loss: 0.2812
+Epoch: 434, Train Loss: 0.2822
+TRAIN: rocauc 0.7767
+VAL: rocauc 0.7181
+TEST: rocauc 0.6892
+Epoch: 435, Train Loss: 0.2828
+Epoch: 436, Train Loss: 0.2818
+Epoch: 437, Train Loss: 0.2819
+Epoch: 438, Train Loss: 0.2832
+Epoch: 439, Train Loss: 0.2817
+TRAIN: rocauc 0.7867
+VAL: rocauc 0.7248
+TEST: rocauc 0.6873
+Epoch: 440, Train Loss: 0.2818
+Epoch: 441, Train Loss: 0.2820
+Epoch: 442, Train Loss: 0.2827
+Epoch: 443, Train Loss: 0.2827
+Epoch: 444, Train Loss: 0.2828
+TRAIN: rocauc 0.7835
+VAL: rocauc 0.7305
+TEST: rocauc 0.6971
+Epoch: 445, Train Loss: 0.2807
+Epoch: 446, Train Loss: 0.2825
+Epoch: 447, Train Loss: 0.2833
+Epoch: 448, Train Loss: 0.2810
+Epoch: 449, Train Loss: 0.2803
+TRAIN: rocauc 0.7836
+VAL: rocauc 0.7235
+TEST: rocauc 0.6886
+Epoch: 450, Train Loss: 0.2831
+Epoch: 451, Train Loss: 0.2829
+Epoch: 452, Train Loss: 0.2820
+Epoch: 453, Train Loss: 0.2832
+Epoch: 454, Train Loss: 0.2814
+TRAIN: rocauc 0.7784
+VAL: rocauc 0.7227
+TEST: rocauc 0.6698
+Epoch: 455, Train Loss: 0.2817
+Epoch: 456, Train Loss: 0.2813
+Epoch: 457, Train Loss: 0.2815
+Epoch: 458, Train Loss: 0.2823
+Epoch: 459, Train Loss: 0.2830
+TRAIN: rocauc 0.7895
+VAL: rocauc 0.7360
+TEST: rocauc 0.7012
+Epoch: 460, Train Loss: 0.2843
+Epoch: 461, Train Loss: 0.2820
+Epoch: 462, Train Loss: 0.2808
+Epoch: 463, Train Loss: 0.2825
+Epoch: 464, Train Loss: 0.2815
+TRAIN: rocauc 0.7821
+VAL: rocauc 0.7273
+TEST: rocauc 0.6941
+Epoch: 465, Train Loss: 0.2818
+Epoch: 466, Train Loss: 0.2810
+Epoch: 467, Train Loss: 0.2810
+Epoch: 468, Train Loss: 0.2823
+Epoch: 469, Train Loss: 0.2800
+TRAIN: rocauc 0.7857
+VAL: rocauc 0.7443
+TEST: rocauc 0.7053
+Epoch: 470, Train Loss: 0.2815
+Epoch: 471, Train Loss: 0.2836
+Epoch: 472, Train Loss: 0.2802
+Epoch: 473, Train Loss: 0.2806
+Epoch: 474, Train Loss: 0.2819
+TRAIN: rocauc 0.7893
+VAL: rocauc 0.7368
+TEST: rocauc 0.6930
+Epoch: 475, Train Loss: 0.2805
+Epoch: 476, Train Loss: 0.2811
+Epoch: 477, Train Loss: 0.2819
+Epoch: 478, Train Loss: 0.2825
+Epoch: 479, Train Loss: 0.2801
+TRAIN: rocauc 0.7854
+VAL: rocauc 0.7330
+TEST: rocauc 0.7129
+Epoch: 480, Train Loss: 0.2808
+Epoch: 481, Train Loss: 0.2816
+Epoch: 482, Train Loss: 0.2789
+Epoch: 483, Train Loss: 0.2816
+Epoch: 484, Train Loss: 0.2821
+TRAIN: rocauc 0.7865
+VAL: rocauc 0.7354
+TEST: rocauc 0.7096
+Epoch: 485, Train Loss: 0.2796
+Epoch: 486, Train Loss: 0.2812
+Epoch: 487, Train Loss: 0.2815
+Epoch: 488, Train Loss: 0.2805
+Epoch: 489, Train Loss: 0.2825
+TRAIN: rocauc 0.7855
+VAL: rocauc 0.7399
+TEST: rocauc 0.7109
+Epoch: 490, Train Loss: 0.2812
+Epoch: 491, Train Loss: 0.2808
+Epoch: 492, Train Loss: 0.2828
+Epoch: 493, Train Loss: 0.2795
+Epoch: 494, Train Loss: 0.2803
+TRAIN: rocauc 0.7851
+VAL: rocauc 0.7347
+TEST: rocauc 0.6959
+Epoch: 495, Train Loss: 0.2800
+Epoch: 496, Train Loss: 0.2817
+Epoch: 497, Train Loss: 0.2812
+Epoch: 498, Train Loss: 0.2825
+Epoch: 499, Train Loss: 0.2807
+rank 3 Peak GPU memory: 2.76 GB
+rank 1 Peak GPU memory: 2.75 GB
+rank 2 Peak GPU memory: 2.75 GB
+TRAIN: rocauc 0.7842
+VAL: rocauc 0.7265
+TEST: rocauc 0.6898
+rank 0 Peak GPU memory: 2.82 GB
+OGB (best val):
+Highest Train (rocauc): 79.61
+Highest Valid (rocauc): 76.17
+  Final Train (rocauc): 79.18
+   Final Test (rocauc): 72.65

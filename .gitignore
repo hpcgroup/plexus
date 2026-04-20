@@ -3,6 +3,8 @@
 *.out
 *.txt
 *.pyc
+/bk
+/4.19
 ana/
 fig/
 result/

@@ -37,9 +37,9 @@ PRESETS = {
         "hidden": 128,
         "num_classes": 172,
         "num_layers": 3,
-        "nnz": 1_615_685_872,
-        "G_r": 8, "G_c": 4, "G_d": 4,   # 128 GPUs
-        "p": 0.01,
+        "nnz": 1_615_685_872 * 2,
+        "G_r": 4, "G_c": 4, "G_d": 4,   # 128 GPUs
+        "p": 0.1,
     },
     "igb_medium": {
         "label": "IGB-Medium (19 classes)",

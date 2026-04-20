@@ -1,0 +1,475 @@
+/pscratch/sd/c/cunyang/gnn/plexus/plexus/utils/dataloader.py:425: UserWarning: Sparse CSR tensor support is in beta state. If you miss a functionality in the sparse tensor support, please submit a feature request to https://github.com/pytorch/pytorch/issues. (Triggered internally at /pytorch/aten/src/ATen/SparseCsrTensorImpl.cpp:53.)
+  adj_local = adj_local.to_sparse_csr()
+/pscratch/sd/c/cunyang/gnn/plexus/plexus/utils/dataloader.py:425: UserWarning: Sparse CSR tensor support is in beta state. If you miss a functionality in the sparse tensor support, please submit a feature request to https://github.com/pytorch/pytorch/issues. (Triggered internally at /pytorch/aten/src/ATen/SparseCsrTensorImpl.cpp:53.)
+  adj_local = adj_local.to_sparse_csr()
+/pscratch/sd/c/cunyang/gnn/plexus/plexus/utils/dataloader.py:425: UserWarning: Sparse CSR tensor support is in beta state. If you miss a functionality in the sparse tensor support, please submit a feature request to https://github.com/pytorch/pytorch/issues. (Triggered internally at /pytorch/aten/src/ATen/SparseCsrTensorImpl.cpp:53.)
+  adj_local = adj_local.to_sparse_csr()
+/pscratch/sd/c/cunyang/gnn/plexus/plexus/utils/dataloader.py:425: UserWarning: Sparse CSR tensor support is in beta state. If you miss a functionality in the sparse tensor support, please submit a feature request to https://github.com/pytorch/pytorch/issues. (Triggered internally at /pytorch/aten/src/ATen/SparseCsrTensorImpl.cpp:53.)
+  adj_local = adj_local.to_sparse_csr()
+steps_per_epoch:  201
+steps_per_epoch:  201
+steps_per_epoch:  201
+steps_per_epoch:  201
+Epoch: 000, Train Loss: 2.0004
+Epoch: 001, Train Loss: 1.2764
+|--[95m 'drop | Max Time: 0.176 ms | Avg Time: 0.167 ms | Load Imbalance: 1.055' [0m
+
+|--[95m 'epoch 0 | Max Time: 3720.480 ms | Avg Time: 3720.285 ms | Load Imbalance: 1.000' [0m
+	|--[92m 'prefetch launch | Max Time: 7.999 ms | Avg Time: 7.600 ms | Load Imbalance: 1.053' [0m
+	|--[92m 'prefetch wait | Max Time: 340.913 ms | Avg Time: 334.773 ms | Load Imbalance: 1.018' [0m
+	|--[92m 'train step | Max Time: 3329.789 ms | Avg Time: 3325.601 ms | Load Imbalance: 1.001' [0m
+		|--[96m 'input_linear | Max Time: 369.254 ms | Avg Time: 358.258 ms | Load Imbalance: 1.031' [0m
+			|--[91m 'input_linear X * W | Max Time: 149.466 ms | Avg Time: 149.181 ms | Load Imbalance: 1.002' [0m
+			|--[91m 'all-reduce | Max Time: 176.252 ms | Avg Time: 162.687 ms | Load Imbalance: 1.083' [0m
+			|--[91m 'OUT + BIAS | Max Time: 11.885 ms | Avg Time: 10.649 ms | Load Imbalance: 1.116' [0m
+		|--[96m 'gcn conv fwd | Max Time: 921.784 ms | Avg Time: 909.138 ms | Load Imbalance: 1.014' [0m
+			|--[91m 'AGG = A * H | Max Time: 107.580 ms | Avg Time: 97.640 ms | Load Imbalance: 1.102' [0m
+			|--[91m 'allreduce H | Max Time: 385.998 ms | Avg Time: 379.687 ms | Load Imbalance: 1.017' [0m
+				|--[95m 'all-reduce | Max Time: 368.863 ms | Avg Time: 360.933 ms | Load Imbalance: 1.022' [0m
+			|--[91m 'Allgather W | Max Time: 177.200 ms | Avg Time: 174.296 ms | Load Imbalance: 1.017' [0m
+				|--[95m 'gather | Max Time: 165.210 ms | Avg Time: 160.582 ms | Load Imbalance: 1.029' [0m
+			|--[91m 'OUT = AGG * W | Max Time: 45.749 ms | Avg Time: 44.573 ms | Load Imbalance: 1.026' [0m
+			|--[91m 'allreduce Q | Max Time: 160.847 ms | Avg Time: 155.011 ms | Load Imbalance: 1.038' [0m
+				|--[95m 'all-reduce | Max Time: 147.703 ms | Avg Time: 140.623 ms | Load Imbalance: 1.050' [0m
+		|--[96m 'activation | Max Time: 277.236 ms | Avg Time: 274.386 ms | Load Imbalance: 1.010' [0m
+			|--[91m 'all-reduce | Max Time: 124.992 ms | Avg Time: 118.951 ms | Load Imbalance: 1.051' [0m
+		|--[96m 'output_linear | Max Time: 37.017 ms | Avg Time: 34.813 ms | Load Imbalance: 1.063' [0m
+			|--[91m 'output_linear X * W | Max Time: 11.279 ms | Avg Time: 10.677 ms | Load Imbalance: 1.056' [0m
+			|--[91m 'all-reduce | Max Time: 3.415 ms | Avg Time: 3.133 ms | Load Imbalance: 1.090' [0m
+			|--[91m 'OUT + BIAS | Max Time: 6.434 ms | Avg Time: 6.059 ms | Load Imbalance: 1.062' [0m
+		|--[96m 'cross entropy fwd | Max Time: 426.424 ms | Avg Time: 419.076 ms | Load Imbalance: 1.018' [0m
+		|--[96m 'cross entropy bwd | Max Time: 9.771 ms | Avg Time: 9.397 ms | Load Imbalance: 1.040' [0m
+		|--[96m 'linear_3d_bwd | Max Time: 261.435 ms | Avg Time: 256.935 ms | Load Imbalance: 1.018' [0m
+			|--[91m 'output_linear GRAD_X | Max Time: 8.849 ms | Avg Time: 8.372 ms | Load Imbalance: 1.057' [0m
+			|--[91m 'all-reduce | Max Time: 198.144 ms | Avg Time: 192.246 ms | Load Imbalance: 1.031' [0m
+			|--[91m 'output_linear GRAD_W | Max Time: 9.080 ms | Avg Time: 7.962 ms | Load Imbalance: 1.140' [0m
+			|--[91m 'input_linear GRAD_W | Max Time: 8.953 ms | Avg Time: 8.492 ms | Load Imbalance: 1.054' [0m
+		|--[96m 'gcn conv bwd | Max Time: 540.317 ms | Avg Time: 534.403 ms | Load Imbalance: 1.011' [0m
+			|--[91m 'gather | Max Time: 94.999 ms | Avg Time: 91.779 ms | Load Imbalance: 1.035' [0m
+			|--[91m 'GRAD_AGG = GRAD_OUT * W.T | Max Time: 21.792 ms | Avg Time: 21.266 ms | Load Imbalance: 1.025' [0m
+			|--[91m 'all-reduce | Max Time: 171.543 ms | Avg Time: 166.105 ms | Load Imbalance: 1.033' [0m
+			|--[91m 'GRAD_W = AGG.T * GRAD_OUT | Max Time: 25.879 ms | Avg Time: 24.943 ms | Load Imbalance: 1.038' [0m
+			|--[91m 'ReduceScatter grad_weight | Max Time: 89.807 ms | Avg Time: 88.655 ms | Load Imbalance: 1.013' [0m
+				|--[95m 'reduce-scatter | Max Time: 81.092 ms | Avg Time: 79.123 ms | Load Imbalance: 1.025' [0m
+					|--[92m 'reduce-scatter-dist | Max Time: 72.059 ms | Avg Time: 69.172 ms | Load Imbalance: 1.042' [0m
+			|--[91m 'GRAD_H = A.T * GRAD_AGG | Max Time: 31.019 ms | Avg Time: 30.358 ms | Load Imbalance: 1.022' [0m
+			|--[91m 'allreduce grad_x | Max Time: 63.585 ms | Avg Time: 61.960 ms | Load Imbalance: 1.026' [0m
+				|--[95m 'all-reduce | Max Time: 55.753 ms | Avg Time: 53.376 ms | Load Imbalance: 1.045' [0m
+		|--[96m 'sync_norm_gradients | Max Time: 68.602 ms | Avg Time: 67.448 ms | Load Imbalance: 1.017' [0m
+		|--[96m 'sync_data_parallel_gradients | Max Time: 2.021 ms | Avg Time: 1.861 ms | Load Imbalance: 1.086' [0m
+
+|--[95m 'epoch 1 | Max Time: 3054.774 ms | Avg Time: 3054.690 ms | Load Imbalance: 1.000' [0m
+	|--[92m 'prefetch launch | Max Time: 6.728 ms | Avg Time: 6.677 ms | Load Imbalance: 1.008' [0m
+	|--[92m 'prefetch wait | Max Time: 209.947 ms | Avg Time: 201.136 ms | Load Imbalance: 1.044' [0m
+	|--[92m 'train step | Max Time: 2806.083 ms | Avg Time: 2794.504 ms | Load Imbalance: 1.004' [0m
+		|--[96m 'input_linear | Max Time: 201.550 ms | Avg Time: 137.079 ms | Load Imbalance: 1.470' [0m
+			|--[91m 'input_linear X * W | Max Time: 22.055 ms | Avg Time: 21.947 ms | Load Imbalance: 1.005' [0m
+			|--[91m 'all-reduce | Max Time: 134.292 ms | Avg Time: 69.148 ms | Load Imbalance: 1.942' [0m
+			|--[91m 'OUT + BIAS | Max Time: 11.208 ms | Avg Time: 10.392 ms | Load Imbalance: 1.079' [0m
+		|--[96m 'gcn conv fwd | Max Time: 814.108 ms | Avg Time: 764.042 ms | Load Imbalance: 1.066' [0m
+			|--[91m 'AGG = A * H | Max Time: 46.629 ms | Avg Time: 46.109 ms | Load Imbalance: 1.011' [0m
+			|--[91m 'allreduce H | Max Time: 355.392 ms | Avg Time: 312.168 ms | Load Imbalance: 1.138' [0m
+				|--[95m 'all-reduce | Max Time: 336.010 ms | Avg Time: 293.379 ms | Load Imbalance: 1.145' [0m
+			|--[91m 'Allgather W | Max Time: 165.407 ms | Avg Time: 164.662 ms | Load Imbalance: 1.005' [0m
+				|--[95m 'gather | Max Time: 151.937 ms | Avg Time: 151.060 ms | Load Imbalance: 1.006' [0m
+			|--[91m 'OUT = AGG * W | Max Time: 36.936 ms | Avg Time: 26.927 ms | Load Imbalance: 1.372' [0m
+			|--[91m 'allreduce Q | Max Time: 168.766 ms | Avg Time: 155.628 ms | Load Imbalance: 1.084' [0m
+				|--[95m 'all-reduce | Max Time: 154.194 ms | Avg Time: 141.154 ms | Load Imbalance: 1.092' [0m
+		|--[96m 'activation | Max Time: 229.697 ms | Avg Time: 217.060 ms | Load Imbalance: 1.058' [0m
+			|--[91m 'all-reduce | Max Time: 135.644 ms | Avg Time: 126.079 ms | Load Imbalance: 1.076' [0m
+		|--[96m 'output_linear | Max Time: 35.597 ms | Avg Time: 34.439 ms | Load Imbalance: 1.034' [0m
+			|--[91m 'output_linear X * W | Max Time: 10.675 ms | Avg Time: 10.417 ms | Load Imbalance: 1.025' [0m
+			|--[91m 'all-reduce | Max Time: 3.319 ms | Avg Time: 3.104 ms | Load Imbalance: 1.069' [0m
+			|--[91m 'OUT + BIAS | Max Time: 6.203 ms | Avg Time: 5.970 ms | Load Imbalance: 1.039' [0m
+		|--[96m 'cross entropy fwd | Max Time: 377.540 ms | Avg Time: 374.934 ms | Load Imbalance: 1.007' [0m
+		|--[96m 'cross entropy bwd | Max Time: 9.227 ms | Avg Time: 9.041 ms | Load Imbalance: 1.021' [0m
+		|--[96m 'linear_3d_bwd | Max Time: 264.777 ms | Avg Time: 255.753 ms | Load Imbalance: 1.035' [0m
+			|--[91m 'output_linear GRAD_X | Max Time: 7.369 ms | Avg Time: 7.239 ms | Load Imbalance: 1.018' [0m
+			|--[91m 'all-reduce | Max Time: 200.934 ms | Avg Time: 193.462 ms | Load Imbalance: 1.039' [0m
+			|--[91m 'output_linear GRAD_W | Max Time: 7.863 ms | Avg Time: 7.415 ms | Load Imbalance: 1.060' [0m
+			|--[91m 'input_linear GRAD_W | Max Time: 8.951 ms | Avg Time: 8.316 ms | Load Imbalance: 1.076' [0m
+		|--[96m 'gcn conv bwd | Max Time: 619.266 ms | Avg Time: 612.895 ms | Load Imbalance: 1.010' [0m
+			|--[91m 'gather | Max Time: 93.227 ms | Avg Time: 91.315 ms | Load Imbalance: 1.021' [0m
+			|--[91m 'GRAD_AGG = GRAD_OUT * W.T | Max Time: 21.489 ms | Avg Time: 20.714 ms | Load Imbalance: 1.037' [0m
+			|--[91m 'all-reduce | Max Time: 245.526 ms | Avg Time: 208.374 ms | Load Imbalance: 1.178' [0m
+			|--[91m 'GRAD_W = AGG.T * GRAD_OUT | Max Time: 23.702 ms | Avg Time: 22.281 ms | Load Imbalance: 1.064' [0m
+			|--[91m 'ReduceScatter grad_weight | Max Time: 176.315 ms | Avg Time: 129.797 ms | Load Imbalance: 1.358' [0m
+				|--[95m 'reduce-scatter | Max Time: 167.630 ms | Avg Time: 120.241 ms | Load Imbalance: 1.394' [0m
+					|--[92m 'reduce-scatter-dist | Max Time: 158.508 ms | Avg Time: 88.017 ms | Load Imbalance: 1.801' [0m
+			|--[91m 'GRAD_H = A.T * GRAD_AGG | Max Time: 31.245 ms | Avg Time: 29.327 ms | Load Imbalance: 1.065' [0m
+			|--[91m 'allreduce grad_x | Max Time: 62.658 ms | Avg Time: 61.859 ms | Load Imbalance: 1.013' [0m
+				|--[95m 'all-reduce | Max Time: 54.974 ms | Avg Time: 53.168 ms | Load Imbalance: 1.034' [0m
+		|--[96m 'sync_norm_gradients | Max Time: 71.717 ms | Avg Time: 67.284 ms | Load Imbalance: 1.066' [0m
+		|--[96m 'sync_data_parallel_gradients | Max Time: 2.189 ms | Avg Time: 1.904 ms | Load Imbalance: 1.150' [0m
+
+|--[95m 'epoch 2 | Max Time: 2877.533 ms | Avg Time: 2877.014 ms | Load Imbalance: 1.000' [0m
+	|--[92m 'prefetch launch | Max Time: 6.704 ms | Avg Time: 6.652 ms | Load Imbalance: 1.008' [0m
+	|--[92m 'prefetch wait | Max Time: 212.637 ms | Avg Time: 208.224 ms | Load Imbalance: 1.021' [0m
+	|--[92m 'train step | Max Time: 2614.482 ms | Avg Time: 2609.706 ms | Load Imbalance: 1.002' [0m
+		|--[96m 'input_linear | Max Time: 119.692 ms | Avg Time: 117.296 ms | Load Imbalance: 1.020' [0m
+			|--[91m 'input_linear X * W | Max Time: 22.344 ms | Avg Time: 21.932 ms | Load Imbalance: 1.019' [0m
+			|--[91m 'all-reduce | Max Time: 51.428 ms | Avg Time: 50.142 ms | Load Imbalance: 1.026' [0m
+			|--[91m 'OUT + BIAS | Max Time: 10.566 ms | Avg Time: 10.116 ms | Load Imbalance: 1.044' [0m
+		|--[96m 'gcn conv fwd | Max Time: 720.064 ms | Avg Time: 717.305 ms | Load Imbalance: 1.004' [0m
+			|--[91m 'AGG = A * H | Max Time: 45.516 ms | Avg Time: 45.026 ms | Load Imbalance: 1.011' [0m
+			|--[91m 'allreduce H | Max Time: 281.708 ms | Avg Time: 277.074 ms | Load Imbalance: 1.017' [0m
+				|--[95m 'all-reduce | Max Time: 262.835 ms | Avg Time: 258.539 ms | Load Imbalance: 1.017' [0m
+			|--[91m 'Allgather W | Max Time: 165.449 ms | Avg Time: 163.248 ms | Load Imbalance: 1.013' [0m
+				|--[95m 'gather | Max Time: 152.769 ms | Avg Time: 149.916 ms | Load Imbalance: 1.019' [0m
+			|--[91m 'OUT = AGG * W | Max Time: 23.249 ms | Avg Time: 22.350 ms | Load Imbalance: 1.040' [0m
+			|--[91m 'allreduce Q | Max Time: 155.582 ms | Avg Time: 153.510 ms | Load Imbalance: 1.014' [0m
+				|--[95m 'all-reduce | Max Time: 142.223 ms | Avg Time: 139.571 ms | Load Imbalance: 1.019' [0m
+		|--[96m 'activation | Max Time: 211.956 ms | Avg Time: 208.953 ms | Load Imbalance: 1.014' [0m
+			|--[91m 'all-reduce | Max Time: 122.834 ms | Avg Time: 120.043 ms | Load Imbalance: 1.023' [0m
+		|--[96m 'output_linear | Max Time: 35.147 ms | Avg Time: 33.555 ms | Load Imbalance: 1.047' [0m
+			|--[91m 'output_linear X * W | Max Time: 10.565 ms | Avg Time: 10.101 ms | Load Imbalance: 1.046' [0m
+			|--[91m 'all-reduce | Max Time: 3.187 ms | Avg Time: 2.951 ms | Load Imbalance: 1.080' [0m
+			|--[91m 'OUT + BIAS | Max Time: 6.249 ms | Avg Time: 5.854 ms | Load Imbalance: 1.067' [0m
+		|--[96m 'cross entropy fwd | Max Time: 380.151 ms | Avg Time: 375.445 ms | Load Imbalance: 1.013' [0m
+		|--[96m 'cross entropy bwd | Max Time: 9.226 ms | Avg Time: 9.074 ms | Load Imbalance: 1.017' [0m
+		|--[96m 'linear_3d_bwd | Max Time: 262.255 ms | Avg Time: 259.879 ms | Load Imbalance: 1.009' [0m
+			|--[91m 'output_linear GRAD_X | Max Time: 7.463 ms | Avg Time: 7.270 ms | Load Imbalance: 1.027' [0m
+			|--[91m 'all-reduce | Max Time: 200.313 ms | Avg Time: 197.997 ms | Load Imbalance: 1.012' [0m
+			|--[91m 'output_linear GRAD_W | Max Time: 7.531 ms | Avg Time: 7.399 ms | Load Imbalance: 1.018' [0m
+			|--[91m 'input_linear GRAD_W | Max Time: 8.455 ms | Avg Time: 8.206 ms | Load Imbalance: 1.030' [0m
+		|--[96m 'gcn conv bwd | Max Time: 524.106 ms | Avg Time: 520.257 ms | Load Imbalance: 1.007' [0m
+			|--[91m 'gather | Max Time: 93.043 ms | Avg Time: 90.046 ms | Load Imbalance: 1.033' [0m
+			|--[91m 'GRAD_AGG = GRAD_OUT * W.T | Max Time: 20.641 ms | Avg Time: 20.199 ms | Load Imbalance: 1.022' [0m
+			|--[91m 'all-reduce | Max Time: 170.220 ms | Avg Time: 164.086 ms | Load Imbalance: 1.037' [0m
+			|--[91m 'GRAD_W = AGG.T * GRAD_OUT | Max Time: 22.732 ms | Avg Time: 21.633 ms | Load Imbalance: 1.051' [0m
+			|--[91m 'ReduceScatter grad_weight | Max Time: 87.194 ms | Avg Time: 86.043 ms | Load Imbalance: 1.013' [0m
+				|--[95m 'reduce-scatter | Max Time: 78.500 ms | Avg Time: 76.643 ms | Load Imbalance: 1.024' [0m
+					|--[92m 'reduce-scatter-dist | Max Time: 69.470 ms | Avg Time: 66.978 ms | Load Imbalance: 1.037' [0m
+			|--[91m 'GRAD_H = A.T * GRAD_AGG | Max Time: 29.732 ms | Avg Time: 28.710 ms | Load Imbalance: 1.036' [0m
+			|--[91m 'allreduce grad_x | Max Time: 62.768 ms | Avg Time: 61.189 ms | Load Imbalance: 1.026' [0m
+				|--[95m 'all-reduce | Max Time: 53.924 ms | Avg Time: 52.807 ms | Load Imbalance: 1.021' [0m
+		|--[96m 'sync_norm_gradients | Max Time: 72.079 ms | Avg Time: 69.315 ms | Load Imbalance: 1.040' [0m
+		|--[96m 'sync_data_parallel_gradients | Max Time: 1.965 ms | Avg Time: 1.807 ms | Load Imbalance: 1.088' [0m
+
+Epoch: 002, Train Loss: 1.1267
+Epoch: 003, Train Loss: 1.0747
+Epoch: 004, Train Loss: 1.0117
+TRAIN: acc 0.9268, f1_micro 0.9268, f1_macro 0.8721 (n=153431)
+VAL: acc 0.9317, f1_micro 0.9317, f1_macro 0.8700 (n=23831)
+TEST: acc 0.9323, f1_micro 0.9323, f1_macro 0.8721 (n=55703)
+Epoch: 005, Train Loss: 0.9895
+Epoch: 006, Train Loss: 0.9468
+Epoch: 007, Train Loss: 0.9291
+Epoch: 008, Train Loss: 0.8988
+Epoch: 009, Train Loss: 0.8892
+TRAIN: acc 0.9273, f1_micro 0.9273, f1_macro 0.8717 (n=153431)
+VAL: acc 0.9324, f1_micro 0.9324, f1_macro 0.8712 (n=23831)
+TEST: acc 0.9323, f1_micro 0.9323, f1_macro 0.8748 (n=55703)
+Epoch: 010, Train Loss: 0.8717
+Epoch: 011, Train Loss: 0.8603
+Epoch: 012, Train Loss: 0.8374
+Epoch: 013, Train Loss: 0.8214
+Epoch: 014, Train Loss: 0.8106
+TRAIN: acc 0.9301, f1_micro 0.9301, f1_macro 0.8864 (n=153431)
+VAL: acc 0.9328, f1_micro 0.9328, f1_macro 0.8869 (n=23831)
+TEST: acc 0.9339, f1_micro 0.9339, f1_macro 0.8861 (n=55703)
+Epoch: 015, Train Loss: 0.7995
+Epoch: 016, Train Loss: 0.7756
+Epoch: 017, Train Loss: 0.7721
+Epoch: 018, Train Loss: 0.7589
+Epoch: 019, Train Loss: 0.7530
+TRAIN: acc 0.9297, f1_micro 0.9297, f1_macro 0.8835 (n=153431)
+VAL: acc 0.9313, f1_micro 0.9313, f1_macro 0.8751 (n=23831)
+TEST: acc 0.9322, f1_micro 0.9322, f1_macro 0.8803 (n=55703)
+Epoch: 020, Train Loss: 0.7266
+Epoch: 021, Train Loss: 0.7194
+Epoch: 022, Train Loss: 0.7034
+Epoch: 023, Train Loss: 0.6913
+Epoch: 024, Train Loss: 0.6816
+TRAIN: acc 0.9268, f1_micro 0.9268, f1_macro 0.8820 (n=153431)
+VAL: acc 0.9282, f1_micro 0.9282, f1_macro 0.8794 (n=23831)
+TEST: acc 0.9281, f1_micro 0.9281, f1_macro 0.8772 (n=55703)
+Epoch: 025, Train Loss: 0.6737
+Epoch: 026, Train Loss: 0.6698
+Epoch: 027, Train Loss: 0.6617
+Epoch: 028, Train Loss: 0.6499
+Epoch: 029, Train Loss: 0.6402
+TRAIN: acc 0.9233, f1_micro 0.9233, f1_macro 0.8797 (n=153431)
+VAL: acc 0.9236, f1_micro 0.9236, f1_macro 0.8689 (n=23831)
+TEST: acc 0.9264, f1_micro 0.9264, f1_macro 0.8775 (n=55703)
+Epoch: 030, Train Loss: 0.6366
+Epoch: 031, Train Loss: 0.6226
+Epoch: 032, Train Loss: 0.6158
+Epoch: 033, Train Loss: 0.6141
+Epoch: 034, Train Loss: 0.5973
+TRAIN: acc 0.9277, f1_micro 0.9277, f1_macro 0.8738 (n=153431)
+VAL: acc 0.9306, f1_micro 0.9306, f1_macro 0.8675 (n=23831)
+TEST: acc 0.9308, f1_micro 0.9308, f1_macro 0.8716 (n=55703)
+Epoch: 035, Train Loss: 0.5965
+Epoch: 036, Train Loss: 0.5802
+Epoch: 037, Train Loss: 0.5900
+Epoch: 038, Train Loss: 0.5837
+Epoch: 039, Train Loss: 0.5766
+TRAIN: acc 0.9196, f1_micro 0.9196, f1_macro 0.8730 (n=153431)
+VAL: acc 0.9197, f1_micro 0.9197, f1_macro 0.8640 (n=23831)
+TEST: acc 0.9214, f1_micro 0.9214, f1_macro 0.8688 (n=55703)
+Epoch: 040, Train Loss: 0.5628
+Epoch: 041, Train Loss: 0.5585
+Epoch: 042, Train Loss: 0.5625
+Epoch: 043, Train Loss: 0.5534
+Epoch: 044, Train Loss: 0.5495
+TRAIN: acc 0.9303, f1_micro 0.9303, f1_macro 0.8896 (n=153431)
+VAL: acc 0.9293, f1_micro 0.9293, f1_macro 0.8794 (n=23831)
+TEST: acc 0.9308, f1_micro 0.9308, f1_macro 0.8850 (n=55703)
+Epoch: 045, Train Loss: 0.5406
+Epoch: 046, Train Loss: 0.5409
+Epoch: 047, Train Loss: 0.5422
+Epoch: 048, Train Loss: 0.5374
+Epoch: 049, Train Loss: 0.5343
+TRAIN: acc 0.9333, f1_micro 0.9333, f1_macro 0.8899 (n=153431)
+VAL: acc 0.9327, f1_micro 0.9327, f1_macro 0.8827 (n=23831)
+TEST: acc 0.9340, f1_micro 0.9340, f1_macro 0.8855 (n=55703)
+Epoch: 050, Train Loss: 0.5305
+Epoch: 051, Train Loss: 0.5211
+Epoch: 052, Train Loss: 0.5289
+Epoch: 053, Train Loss: 0.5131
+Epoch: 054, Train Loss: 0.5062
+TRAIN: acc 0.9303, f1_micro 0.9303, f1_macro 0.8903 (n=153431)
+VAL: acc 0.9285, f1_micro 0.9285, f1_macro 0.8776 (n=23831)
+TEST: acc 0.9305, f1_micro 0.9305, f1_macro 0.8832 (n=55703)
+Epoch: 055, Train Loss: 0.5069
+Epoch: 056, Train Loss: 0.5043
+Epoch: 057, Train Loss: 0.4983
+Epoch: 058, Train Loss: 0.4952
+Epoch: 059, Train Loss: 0.4968
+TRAIN: acc 0.9349, f1_micro 0.9349, f1_macro 0.8991 (n=153431)
+VAL: acc 0.9331, f1_micro 0.9331, f1_macro 0.8884 (n=23831)
+TEST: acc 0.9356, f1_micro 0.9356, f1_macro 0.8946 (n=55703)
+Epoch: 060, Train Loss: 0.5008
+Epoch: 061, Train Loss: 0.4998
+Epoch: 062, Train Loss: 0.4940
+Epoch: 063, Train Loss: 0.4868
+Epoch: 064, Train Loss: 0.4825
+TRAIN: acc 0.9244, f1_micro 0.9244, f1_macro 0.8721 (n=153431)
+VAL: acc 0.9243, f1_micro 0.9243, f1_macro 0.8599 (n=23831)
+TEST: acc 0.9255, f1_micro 0.9255, f1_macro 0.8683 (n=55703)
+Epoch: 065, Train Loss: 0.4898
+Epoch: 066, Train Loss: 0.4791
+Epoch: 067, Train Loss: 0.4834
+Epoch: 068, Train Loss: 0.4781
+Epoch: 069, Train Loss: 0.4787
+TRAIN: acc 0.9257, f1_micro 0.9257, f1_macro 0.8751 (n=153431)
+VAL: acc 0.9251, f1_micro 0.9251, f1_macro 0.8635 (n=23831)
+TEST: acc 0.9269, f1_micro 0.9269, f1_macro 0.8723 (n=55703)
+Epoch: 070, Train Loss: 0.4715
+Epoch: 071, Train Loss: 0.4706
+Epoch: 072, Train Loss: 0.4714
+Epoch: 073, Train Loss: 0.4678
+Epoch: 074, Train Loss: 0.4670
+TRAIN: acc 0.9274, f1_micro 0.9274, f1_macro 0.8755 (n=153431)
+VAL: acc 0.9252, f1_micro 0.9252, f1_macro 0.8610 (n=23831)
+TEST: acc 0.9277, f1_micro 0.9277, f1_macro 0.8676 (n=55703)
+Epoch: 075, Train Loss: 0.4701
+Epoch: 076, Train Loss: 0.4621
+Epoch: 077, Train Loss: 0.4654
+Epoch: 078, Train Loss: 0.4670
+Epoch: 079, Train Loss: 0.4628
+TRAIN: acc 0.9264, f1_micro 0.9264, f1_macro 0.8772 (n=153431)
+VAL: acc 0.9255, f1_micro 0.9255, f1_macro 0.8667 (n=23831)
+TEST: acc 0.9259, f1_micro 0.9259, f1_macro 0.8691 (n=55703)
+Epoch: 080, Train Loss: 0.4648
+Epoch: 081, Train Loss: 0.4651
+Epoch: 082, Train Loss: 0.4592
+Epoch: 083, Train Loss: 0.4575
+Epoch: 084, Train Loss: 0.4567
+TRAIN: acc 0.9311, f1_micro 0.9311, f1_macro 0.8913 (n=153431)
+VAL: acc 0.9305, f1_micro 0.9305, f1_macro 0.8850 (n=23831)
+TEST: acc 0.9302, f1_micro 0.9302, f1_macro 0.8840 (n=55703)
+Epoch: 085, Train Loss: 0.4564
+Epoch: 086, Train Loss: 0.4596
+Epoch: 087, Train Loss: 0.4496
+Epoch: 088, Train Loss: 0.4504
+Epoch: 089, Train Loss: 0.4475
+TRAIN: acc 0.9354, f1_micro 0.9354, f1_macro 0.8983 (n=153431)
+VAL: acc 0.9343, f1_micro 0.9343, f1_macro 0.8898 (n=23831)
+TEST: acc 0.9354, f1_micro 0.9354, f1_macro 0.8923 (n=55703)
+Epoch: 090, Train Loss: 0.4478
+Epoch: 091, Train Loss: 0.4401
+Epoch: 092, Train Loss: 0.4465
+Epoch: 093, Train Loss: 0.4547
+Epoch: 094, Train Loss: 0.4449
+TRAIN: acc 0.9321, f1_micro 0.9321, f1_macro 0.8869 (n=153431)
+VAL: acc 0.9306, f1_micro 0.9306, f1_macro 0.8755 (n=23831)
+TEST: acc 0.9322, f1_micro 0.9322, f1_macro 0.8811 (n=55703)
+Epoch: 095, Train Loss: 0.4436
+Epoch: 096, Train Loss: 0.4444
+Epoch: 097, Train Loss: 0.4474
+Epoch: 098, Train Loss: 0.4457
+Epoch: 099, Train Loss: 0.4417
+TRAIN: acc 0.9302, f1_micro 0.9302, f1_macro 0.8926 (n=153431)
+VAL: acc 0.9290, f1_micro 0.9290, f1_macro 0.8829 (n=23831)
+TEST: acc 0.9300, f1_micro 0.9300, f1_macro 0.8865 (n=55703)
+Epoch: 100, Train Loss: 0.4430
+Epoch: 101, Train Loss: 0.4451
+Epoch: 102, Train Loss: 0.4341
+Epoch: 103, Train Loss: 0.4371
+Epoch: 104, Train Loss: 0.4383
+TRAIN: acc 0.9294, f1_micro 0.9294, f1_macro 0.8750 (n=153431)
+VAL: acc 0.9297, f1_micro 0.9297, f1_macro 0.8643 (n=23831)
+TEST: acc 0.9293, f1_micro 0.9293, f1_macro 0.8682 (n=55703)
+Epoch: 105, Train Loss: 0.4379
+Epoch: 106, Train Loss: 0.4346
+Epoch: 107, Train Loss: 0.4341
+Epoch: 108, Train Loss: 0.4309
+Epoch: 109, Train Loss: 0.4280
+TRAIN: acc 0.9330, f1_micro 0.9330, f1_macro 0.8959 (n=153431)
+VAL: acc 0.9318, f1_micro 0.9318, f1_macro 0.8871 (n=23831)
+TEST: acc 0.9331, f1_micro 0.9331, f1_macro 0.8899 (n=55703)
+Epoch: 110, Train Loss: 0.4312
+Epoch: 111, Train Loss: 0.4221
+Epoch: 112, Train Loss: 0.4323
+Epoch: 113, Train Loss: 0.4287
+Epoch: 114, Train Loss: 0.4307
+TRAIN: acc 0.9339, f1_micro 0.9339, f1_macro 0.8989 (n=153431)
+VAL: acc 0.9328, f1_micro 0.9328, f1_macro 0.8918 (n=23831)
+TEST: acc 0.9333, f1_micro 0.9333, f1_macro 0.8920 (n=55703)
+Epoch: 115, Train Loss: 0.4267
+Epoch: 116, Train Loss: 0.4265
+Epoch: 117, Train Loss: 0.4221
+Epoch: 118, Train Loss: 0.4292
+Epoch: 119, Train Loss: 0.4369
+TRAIN: acc 0.9270, f1_micro 0.9270, f1_macro 0.8825 (n=153431)
+VAL: acc 0.9259, f1_micro 0.9259, f1_macro 0.8718 (n=23831)
+TEST: acc 0.9273, f1_micro 0.9273, f1_macro 0.8765 (n=55703)
+Epoch: 120, Train Loss: 0.4260
+Epoch: 121, Train Loss: 0.4297
+Epoch: 122, Train Loss: 0.4242
+Epoch: 123, Train Loss: 0.4294
+Epoch: 124, Train Loss: 0.4215
+TRAIN: acc 0.9330, f1_micro 0.9330, f1_macro 0.8930 (n=153431)
+VAL: acc 0.9326, f1_micro 0.9326, f1_macro 0.8853 (n=23831)
+TEST: acc 0.9326, f1_micro 0.9326, f1_macro 0.8853 (n=55703)
+Epoch: 125, Train Loss: 0.4248
+Epoch: 126, Train Loss: 0.4193
+Epoch: 127, Train Loss: 0.4257
+Epoch: 128, Train Loss: 0.4255
+Epoch: 129, Train Loss: 0.4234
+TRAIN: acc 0.9317, f1_micro 0.9317, f1_macro 0.8957 (n=153431)
+VAL: acc 0.9312, f1_micro 0.9312, f1_macro 0.8873 (n=23831)
+TEST: acc 0.9321, f1_micro 0.9321, f1_macro 0.8895 (n=55703)
+Epoch: 130, Train Loss: 0.4224
+Epoch: 131, Train Loss: 0.4180
+Epoch: 132, Train Loss: 0.4221
+Epoch: 133, Train Loss: 0.4235
+Epoch: 134, Train Loss: 0.4201
+TRAIN: acc 0.9297, f1_micro 0.9297, f1_macro 0.8888 (n=153431)
+VAL: acc 0.9278, f1_micro 0.9278, f1_macro 0.8782 (n=23831)
+TEST: acc 0.9292, f1_micro 0.9292, f1_macro 0.8820 (n=55703)
+Epoch: 135, Train Loss: 0.4220
+Epoch: 136, Train Loss: 0.4200
+Epoch: 137, Train Loss: 0.4214
+Epoch: 138, Train Loss: 0.4117
+Epoch: 139, Train Loss: 0.4221
+TRAIN: acc 0.9330, f1_micro 0.9330, f1_macro 0.8835 (n=153431)
+VAL: acc 0.9312, f1_micro 0.9312, f1_macro 0.8682 (n=23831)
+TEST: acc 0.9324, f1_micro 0.9324, f1_macro 0.8766 (n=55703)
+Epoch: 140, Train Loss: 0.4107
+Epoch: 141, Train Loss: 0.4156
+Epoch: 142, Train Loss: 0.4169
+Epoch: 143, Train Loss: 0.4177
+Epoch: 144, Train Loss: 0.4178
+TRAIN: acc 0.9348, f1_micro 0.9348, f1_macro 0.8968 (n=153431)
+VAL: acc 0.9328, f1_micro 0.9328, f1_macro 0.8868 (n=23831)
+TEST: acc 0.9342, f1_micro 0.9342, f1_macro 0.8899 (n=55703)
+Epoch: 145, Train Loss: 0.4271
+Epoch: 146, Train Loss: 0.4110
+Epoch: 147, Train Loss: 0.4072
+Epoch: 148, Train Loss: 0.4240
+Epoch: 149, Train Loss: 0.4170
+TRAIN: acc 0.9285, f1_micro 0.9285, f1_macro 0.8879 (n=153431)
+VAL: acc 0.9277, f1_micro 0.9277, f1_macro 0.8790 (n=23831)
+TEST: acc 0.9282, f1_micro 0.9282, f1_macro 0.8815 (n=55703)
+Epoch: 150, Train Loss: 0.4137
+Epoch: 151, Train Loss: 0.4113
+Epoch: 152, Train Loss: 0.4094
+Epoch: 153, Train Loss: 0.4110
+Epoch: 154, Train Loss: 0.4149
+TRAIN: acc 0.9328, f1_micro 0.9328, f1_macro 0.8972 (n=153431)
+VAL: acc 0.9328, f1_micro 0.9328, f1_macro 0.8890 (n=23831)
+TEST: acc 0.9332, f1_micro 0.9332, f1_macro 0.8930 (n=55703)
+Epoch: 155, Train Loss: 0.4078
+Epoch: 156, Train Loss: 0.4155
+Epoch: 157, Train Loss: 0.4146
+Epoch: 158, Train Loss: 0.4156
+Epoch: 159, Train Loss: 0.4114
+TRAIN: acc 0.9330, f1_micro 0.9330, f1_macro 0.8859 (n=153431)
+VAL: acc 0.9319, f1_micro 0.9319, f1_macro 0.8732 (n=23831)
+TEST: acc 0.9324, f1_micro 0.9324, f1_macro 0.8797 (n=55703)
+Epoch: 160, Train Loss: 0.4096
+Epoch: 161, Train Loss: 0.4147
+Epoch: 162, Train Loss: 0.4076
+Epoch: 163, Train Loss: 0.4055
+Epoch: 164, Train Loss: 0.4064
+TRAIN: acc 0.9320, f1_micro 0.9320, f1_macro 0.8926 (n=153431)
+VAL: acc 0.9317, f1_micro 0.9317, f1_macro 0.8845 (n=23831)
+TEST: acc 0.9311, f1_micro 0.9311, f1_macro 0.8835 (n=55703)
+Epoch: 165, Train Loss: 0.4057
+Epoch: 166, Train Loss: 0.4032
+Epoch: 167, Train Loss: 0.4027
+Epoch: 168, Train Loss: 0.3995
+Epoch: 169, Train Loss: 0.4035
+TRAIN: acc 0.9247, f1_micro 0.9247, f1_macro 0.8849 (n=153431)
+VAL: acc 0.9247, f1_micro 0.9247, f1_macro 0.8766 (n=23831)
+TEST: acc 0.9260, f1_micro 0.9260, f1_macro 0.8792 (n=55703)
+Epoch: 170, Train Loss: 0.4098
+Epoch: 171, Train Loss: 0.4069
+Epoch: 172, Train Loss: 0.4028
+Epoch: 173, Train Loss: 0.4037
+Epoch: 174, Train Loss: 0.4058
+TRAIN: acc 0.9325, f1_micro 0.9325, f1_macro 0.8935 (n=153431)
+VAL: acc 0.9315, f1_micro 0.9315, f1_macro 0.8839 (n=23831)
+TEST: acc 0.9324, f1_micro 0.9324, f1_macro 0.8854 (n=55703)
+Epoch: 175, Train Loss: 0.4085
+Epoch: 176, Train Loss: 0.3976
+Epoch: 177, Train Loss: 0.4133
+Epoch: 178, Train Loss: 0.4082
+Epoch: 179, Train Loss: 0.3986
+TRAIN: acc 0.9338, f1_micro 0.9338, f1_macro 0.8982 (n=153431)
+VAL: acc 0.9328, f1_micro 0.9328, f1_macro 0.8903 (n=23831)
+TEST: acc 0.9335, f1_micro 0.9335, f1_macro 0.8924 (n=55703)
+Epoch: 180, Train Loss: 0.4049
+Epoch: 181, Train Loss: 0.4078
+Epoch: 182, Train Loss: 0.4049
+Epoch: 183, Train Loss: 0.4024
+Epoch: 184, Train Loss: 0.3948
+TRAIN: acc 0.9309, f1_micro 0.9309, f1_macro 0.8964 (n=153431)
+VAL: acc 0.9303, f1_micro 0.9303, f1_macro 0.8862 (n=23831)
+TEST: acc 0.9311, f1_micro 0.9311, f1_macro 0.8901 (n=55703)
+Epoch: 185, Train Loss: 0.3983
+Epoch: 186, Train Loss: 0.3981
+Epoch: 187, Train Loss: 0.3936
+Epoch: 188, Train Loss: 0.3998
+Epoch: 189, Train Loss: 0.3972
+TRAIN: acc 0.9337, f1_micro 0.9337, f1_macro 0.8972 (n=153431)
+VAL: acc 0.9330, f1_micro 0.9330, f1_macro 0.8886 (n=23831)
+TEST: acc 0.9336, f1_micro 0.9336, f1_macro 0.8911 (n=55703)
+Epoch: 190, Train Loss: 0.4017
+Epoch: 191, Train Loss: 0.4011
+Epoch: 192, Train Loss: 0.4033
+Epoch: 193, Train Loss: 0.3981
+Epoch: 194, Train Loss: 0.3980
+TRAIN: acc 0.9256, f1_micro 0.9256, f1_macro 0.8830 (n=153431)
+VAL: acc 0.9267, f1_micro 0.9267, f1_macro 0.8762 (n=23831)
+TEST: acc 0.9266, f1_micro 0.9266, f1_macro 0.8769 (n=55703)
+Epoch: 195, Train Loss: 0.3966
+Epoch: 196, Train Loss: 0.4007
+Epoch: 197, Train Loss: 0.3941
+Epoch: 198, Train Loss: 0.3995
+Epoch: 199, Train Loss: 0.4018
+TRAIN: acc 0.9314, f1_micro 0.9314, f1_macro 0.8940 (n=153431)
+VAL: acc 0.9303, f1_micro 0.9303, f1_macro 0.8834 (n=23831)
+TEST: acc 0.9311, f1_micro 0.9311, f1_macro 0.8859 (n=55703)
+rank 0 Peak GPU memory: 6.15 GB
+rank 1 Peak GPU memory: 6.16 GB
+rank 2 Peak GPU memory: 6.16 GB
+rank 3 Peak GPU memory: 6.18 GB
+OGB (best val):
+Highest Train (acc): 93.54
+Highest Valid (acc): 93.43
+  Final Train (acc): 93.54
+   Final Test (acc): 93.54

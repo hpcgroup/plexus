@@ -28,8 +28,8 @@ from plexus.utils.subgraph_sampler import (
     build_compact_adj_shards,
 )
 
-PROFILE_START_EPOCH = 4
-PROFILE_END_EPOCH = 10
+PROFILE_START_EPOCH = 6
+PROFILE_END_EPOCH = 9
 _KinetoProfile._get_distributed_info = lambda self: None
 
 # arguments
@@ -1296,7 +1296,28 @@ if __name__ == "__main__":
         )
         prefetch_stream = torch.cuda.Stream(device=prefetch_device_index)
         
-    tag=1
+    tag=0
+    # Cold-start prefetch for epoch 0 (unavoidable; no training to overlap with)
+    prefetch_future = None
+    if overlap_samp and use_minibatch:
+        prefetch_future = _launch_compact_prefetch(
+            prefetch_executor=prefetch_executor,
+            prefetch_stream=prefetch_stream,
+            device_index=prefetch_device_index,
+            model=model,
+            data_loader=data_loader,
+            train_adj_shards=train_adj_shards,
+            features=features,
+            labels=labels,
+            train_mask=train_mask,
+            num_nodes=num_nodes,
+            minibatch_nodes=args.minibatch_nodes,
+            minibatch_ratio=args.minibatch_ratio,
+            minibatch_seed=minibatch_seed,
+            global_step=0,
+            edge_scale=edge_scale_global,
+        )
+
     # training loop
     for i in range(args.num_epochs):
         # if i == PROFILE_START_EPOCH:
@@ -1312,27 +1333,6 @@ if __name__ == "__main__":
             ax.get_timers().start("epoch " + str(i))
 
         epoch_loss = 0.0
-        prefetch_future = None
-        if overlap_samp and use_minibatch:
-            ax.get_timers().start("prefetch launch")
-            prefetch_future = _launch_compact_prefetch(
-                prefetch_executor=prefetch_executor,
-                prefetch_stream=prefetch_stream,
-                device_index=prefetch_device_index,
-                model=model,
-                data_loader=data_loader,
-                train_adj_shards=train_adj_shards,
-                features=features,
-                labels=labels,
-                train_mask=train_mask,
-                num_nodes=num_nodes,
-                minibatch_nodes=args.minibatch_nodes,
-                minibatch_ratio=args.minibatch_ratio,
-                minibatch_seed=minibatch_seed,
-                global_step=i * steps_per_epoch,
-                edge_scale=edge_scale_global,
-            )
-            ax.get_timers().stop("prefetch launch")
         for step in range(steps_per_epoch):
             global_step = i * steps_per_epoch + step
             if use_minibatch:
@@ -1357,6 +1357,26 @@ if __name__ == "__main__":
                             minibatch_ratio=args.minibatch_ratio,
                             minibatch_seed=minibatch_seed,
                             global_step=global_step + 1,
+                            edge_scale=edge_scale_global,
+                        )
+                        ax.get_timers().stop("prefetch launch")
+                    elif i + 1 < args.num_epochs:
+                        ax.get_timers().start("prefetch launch")
+                        prefetch_future = _launch_compact_prefetch(
+                            prefetch_executor=prefetch_executor,
+                            prefetch_stream=prefetch_stream,
+                            device_index=prefetch_device_index,
+                            model=model,
+                            data_loader=data_loader,
+                            train_adj_shards=train_adj_shards,
+                            features=features,
+                            labels=labels,
+                            train_mask=train_mask,
+                            num_nodes=num_nodes,
+                            minibatch_nodes=args.minibatch_nodes,
+                            minibatch_ratio=args.minibatch_ratio,
+                            minibatch_seed=minibatch_seed,
+                            global_step=(i + 1) * steps_per_epoch,
                             edge_scale=edge_scale_global,
                         )
                         ax.get_timers().stop("prefetch launch")
@@ -1437,8 +1457,8 @@ if __name__ == "__main__":
             prof.step()
 
         if do_eval and args.eval_every > 0 and (i + 1) % args.eval_every == 0:
-            # if tag == 1:
-            #     ax.get_timers().start("eval")
+            if tag < 3:
+                ax.get_timers().start("eval")
             metrics = evaluate(
                 model,
                 features,
@@ -1450,10 +1470,10 @@ if __name__ == "__main__":
                 layout_metadata=full_layout_metadata,
                 multilabel_metric=args.multilabel_metric,
             )
-            # if tag == 1:
-            #     ax.get_timers().stop("eval")
-            #     print_axonn_timer_data(ax.get_timers().get_times()[0])
-            #     tag = 0
+            if tag < 3:
+                ax.get_timers().stop("eval")
+                print_axonn_timer_data(ax.get_timers().get_times()[0])
+                tag += 1
             if dist.get_rank() == 0:
                 for split, m in metrics.items():
                     if m is None:

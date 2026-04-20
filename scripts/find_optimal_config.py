@@ -2,21 +2,21 @@ import argparse
 import sys
 import os
 
-# 确保脚本可以找到 performance 目录下的模块
-# 这假设脚本在 plexus-AE 根目录下运行
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# Ensure the script can find modules under the performance directory.
+# This assumes the script is run from the plexus root directory.
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 try:
     from performance.comm_model import compute_config_costs
     from performance.comp_model import comp_model
 except ImportError:
-    print("错误: 无法导入性能模型。")
-    print("请确保此脚本位于'plexus-AE'项目的根目录中，")
-    print("并且'performance/comm_model.py'和'performance/comp_model.py'文件存在。")
+    print("Error: Failed to import performance models.")
+    print("Please make sure this script is located in the 'plexus-AE' project root,")
+    print("and that 'performance/comm_model.py' and 'performance/comp_model.py' exist.")
     sys.exit(1)
 
 
-# 根据您提供的图片存储数据集的统计信息
+# Dataset statistics
 DATASET_STATS = {
     "Reddit": {
         "nodes": 232965,
@@ -144,28 +144,35 @@ DATASET_STATS = {
         "features": 128,
         "classes": 32,
     },
+    "igb-medium": {
+        "nodes": 10000000,
+        "non_zeros": 130077694,
+        "features": 1024,
+        "classes": 19,
+    },
 }
 
 def is_power_of_two(n):
-    """检查一个数是否是2的幂。"""
+    """Check whether a number is a power of two."""
     return (n > 0) and (n & (n - 1) == 0)
 
 def find_optimal_configuration(dataset_name, total_gpus, hidden_dim=128):
     """
-    根据给定的数据集和GPU数量，计算并返回最优的3D并行配置。
+    Compute and return the optimal 3D parallel configuration for a given
+    dataset and GPU count.
 
     Args:
-        dataset_name (str): 数据集的名称。
-        total_gpus (int): 用于训练的GPU总数。
-        hidden_dim (int): GNN模型的隐藏层维度。
+        dataset_name (str): Name of the dataset.
+        total_gpus (int): Total number of GPUs for training.
+        hidden_dim (int): Hidden dimension of the GNN model.
     """
     if dataset_name not in DATASET_STATS:
-        print(f"错误: 未知的数据集 '{dataset_name}'。")
-        print(f"可用数据集: {', '.join(DATASET_STATS.keys())}")
+        print(f"Error: Unknown dataset '{dataset_name}'.")
+        print(f"Available datasets: {', '.join(DATASET_STATS.keys())}")
         return
 
     if not is_power_of_two(total_gpus):
-        print(f"错误: GPU总数 ({total_gpus}) 必须是2的幂。")
+        print(f"Error: Total GPU count ({total_gpus}) must be a power of two.")
         return
 
     stats = DATASET_STATS[dataset_name]
@@ -174,65 +181,70 @@ def find_optimal_configuration(dataset_name, total_gpus, hidden_dim=128):
     num_features = stats["features"]
     num_classes = stats["classes"]
 
-    print(f"正在为数据集 '{dataset_name}' 在 {total_gpus} 个GPU上寻找最优配置...")
-    print(f"参数: N={N}, NNZ={NNZ}, Features={num_features}, Classes={num_classes}, HiddenDim={hidden_dim}")
+    print(f"Searching for optimal configuration for dataset '{dataset_name}' on {total_gpus} GPUs...")
+    print(f"Params: N={N}, NNZ={NNZ}, Features={num_features}, Classes={num_classes}, HiddenDim={hidden_dim}")
     print("-" * 40)
 
-    # 假设模型有3个GCN层，这是 train.py 中的默认设置
-    # D_list for computation model (不包含最后的类别数)
-    d_list_comp = [num_features, hidden_dim, hidden_dim]
-    # D_list for communication model (包含最后的类别数)
-    d_list_comm = [num_features, hidden_dim, hidden_dim, num_classes]
+    # Model architecture: input_linear + 3 GCN layers + output_linear
+    # input_linear: num_features -> hidden_dim (pure GEMM, no SpMM)
+    # GCN 0/1/2:   hidden_dim -> hidden_dim   (SpMM + GEMM)
+    # output_linear: hidden_dim -> num_classes (pure GEMM, no SpMM)
 
-    # --- 运行模型 ---
-    # 假设使用Perlmutter的经验带宽模型
+    # D_list for computation model: only GCN layers with SpMM, excludes pure linear layers and classes.
+    # input_linear already projects features to hidden_dim, so all 3 GCN layers do SpMM at hidden_dim.
+    d_list_comp = [hidden_dim, hidden_dim, hidden_dim]
+    # D_list for communication model: all layer feature-dimension transitions (5 transitions)
+    d_list_comm = [num_features, hidden_dim, hidden_dim, hidden_dim, hidden_dim, num_classes]
+
+    # --- Run models ---
+    # Use Perlmutter empirical bandwidth model
     comm_costs = compute_config_costs(total_gpus, N, d_list_comm, version="v3", machine="perlmutter")
-    # 使用默认系数运行计算模型
+    # Use default coefficients for computation model
     comp_costs = comp_model(N, NNZ, total_gpus, d_list_comp)
 
-    # --- 整合结果 ---
+    # --- Combine results ---
     total_costs = {}
     for config, comm_time in comm_costs.items():
         if config in comp_costs:
             total_costs[config] = comm_time + comp_costs[config]
 
     if not total_costs:
-        print("未能计算任何配置的成本。请检查模型实现。")
+        print("Failed to compute costs for any configuration. Please check the model implementation.")
         return
 
-    # 对总时间进行排序
+    # Sort by total time
     sorted_configs = sorted(total_costs.items(), key=lambda item: item[1])
 
-    # --- 打印结果 ---
-    print("各3D配置的估算总成本 (通信 + 计算)，按优劣排序:")
+    # --- Print results ---
+    print("Estimated total cost (communication + computation) for each 3D configuration, sorted best to worst:")
     for config, total_time in sorted_configs:
         config_str = f"(X={config[0]}, Y={config[1]}, Z={config[2]})"
-        print(f"  - 配置 {config_str:<20}: {total_time:.4f} ms")
-        
+        print(f"  - Config {config_str:<20}: {total_time:.4f} ms")
+
     print("-" * 40)
     best_config, min_time = sorted_configs[0]
     best_config_str = f"(X={best_config[0]}, Y={best_config[1]}, Z={best_config[2]})"
-    print(f"✅ 找到的最优配置是: {best_config_str}，估算总时间为 {min_time:.4f} ms")
+    print(f"Best configuration: {best_config_str}, estimated total time: {min_time:.4f} ms")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="使用性能模型为Plexus GNN训练找到最优的3D并行配置。"
+        description="Find the optimal 3D parallel configuration for Plexus GNN training using performance models."
     )
     parser.add_argument(
         "--dataset",
         type=str,
         required=True,
         choices=list(DATASET_STATS.keys()),
-        help="要使用的数据集名称。"
+        help="Name of the dataset to use."
     )
     parser.add_argument(
         "--gpus",
         type=int,
         required=True,
-        help="用于训练的GPU总数 (必须是2的幂)。"
+        help="Total number of GPUs for training (must be a power of two)."
     )
-    
+
     args = parser.parse_args()
-    
+
     find_optimal_configuration(args.dataset, args.gpus)
