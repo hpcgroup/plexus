@@ -242,6 +242,15 @@ def create_parser():
         default=0.3,
         help="Dropout probability (default: 0.3).",
     )
+    parser.add_argument(
+        "--pccl_allreduce",
+        action="store_true",
+        default=False,
+        help=(
+            "Use PCCL hierarchical all-reduce (reduce-scatter + all-gather) "
+            "instead of NCCL flat all-reduce for synchronous TP collectives."
+        ),
+    )
     return parser
 
 
@@ -1109,8 +1118,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
     set_seed(args.seed)
 
+    if args.pccl_allreduce:
+        from mpi4py import MPI
+        if not MPI.Is_initialized():
+            MPI.Init()
+        print(f"[rank ?] MPI initialized", flush=True)
+
     # initialize distributed environment
     dist.init_process_group(backend="nccl")
+    print(f"[rank {dist.get_rank()}] dist.init_process_group done", flush=True)
     plx.init(
         G_intra_r=args.G_intra_r,
         G_intra_c=args.G_intra_c,
@@ -1131,6 +1147,7 @@ if __name__ == "__main__":
         overlap_fwd_comm_flag=args.overlap_fwd_comm,
         overlap_bwd_comm_flag=args.overlap_bwd_comm,
         overlap_linear_bwd_flag=args.overlap_linear_bwd,
+        use_pccl_allreduce_flag=args.pccl_allreduce,
     )
     dp_rank = ax.comm_handle.data_parallel_rank
 

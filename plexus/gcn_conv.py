@@ -12,12 +12,51 @@ import torch.nn.functional as F
 from plexus import plexus as plx
 import torch.distributed as dist
 from plexus.utils.matmul_tuning import tuned_matmul
-from plexus.utils.general import pad_dimension, get_process_groups_info, _log_collective_message_size
+from plexus.utils.general import pad_dimension, get_process_groups_info
 from axonn.intra_layer.communication import (
     _gather,
     _all_reduce,
     _reduce_scatter,
 )
+
+
+def pccl_all_reduce(tensor: torch.Tensor, process_group: Any) -> None:
+    """
+    Perform an in-place all-reduce using PCCL's hierarchical
+    reduce_scatter_2D + all_gather_2D when a PCCL ProcessGroups mapping
+    exists for the given AxoNN process group.  Falls back to
+    dist.all_reduce otherwise.
+    """
+    from pccl import reduce_scatter_2D, all_gather_2D
+
+    pccl_pg = plx._pccl_process_groups.get(process_group)
+    if pccl_pg is None:
+        dist.all_reduce(tensor, group=process_group)
+        return
+
+    flat = tensor.reshape(-1)
+    intra_size, inter_size = pccl_pg.get_world_size()
+    world_size = intra_size * inter_size
+    chunk_size = flat.numel() // world_size
+    assert flat.numel() % world_size == 0
+
+    output = torch.empty_like(flat)
+    rs_output = torch.empty(chunk_size, device=flat.device, dtype=flat.dtype)
+    reduce_scatter_2D(
+        rs_output,
+        flat,
+        group=pccl_pg,
+        use_rh=True,
+        use_pccl_cpp_backend=True,
+    )
+    all_gather_2D(
+        output,
+        rs_output,
+        group=pccl_pg,
+        use_rd=True,
+        use_pccl_cpp_backend=True,
+    )
+    tensor.copy_(output.reshape_as(tensor))
 from axonn.intra_layer.fully_connected import (
     extract_local_params_from_full_params,
 )
@@ -88,7 +127,10 @@ def _all_reduce_with_optional_lowp(
     enable_lowp: bool = False,
 ) -> None:
     if not _should_use_lowp_allreduce(tensor, enable_lowp):
-        _all_reduce(tensor, process_group)
+        if plx.use_pccl_allreduce:
+            pccl_all_reduce(tensor, process_group)
+        else:
+            _all_reduce(tensor, process_group)
         return
 
     comm_dtype = _lowp_comm_dtype()
@@ -101,7 +143,10 @@ def _all_reduce_with_optional_lowp(
         reduce_buf = cast_buf.view_as(tensor)
     ax.get_timers().stop("allreduce lowp comm dtype")
     ax.get_timers().start("allreduce lowp")
-    dist.all_reduce(reduce_buf, group=process_group)
+    if plx.use_pccl_allreduce:
+        pccl_all_reduce(reduce_buf, process_group)
+    else:
+        dist.all_reduce(reduce_buf, group=process_group)
     ax.get_timers().stop("allreduce lowp")
     if reduce_buf is not tensor:
         ax.get_timers().start("allreduce copy back")
@@ -223,8 +268,10 @@ def chunked_spmm_all_reduce(csr_matrix, H, ar_group):
                 else _all_reduce(results[i], ar_group)
             )
         else:
-            # Perform all-reduce on the chunk result
-            _all_reduce(results[i], ar_group)
+            if plx.use_pccl_allreduce:
+                pccl_all_reduce(results[i], ar_group)
+            else:
+                _all_reduce(results[i], ar_group)
 
     if plx.overlap_agg:
         # Wait for all asynchronous all-reduce operations to complete.
@@ -289,7 +336,7 @@ class GCNConvFunction(torch.autograd.Function):
         # gather features if sharded
         if gather_features:
             ax.get_timers().start("Allgather F")
-            _log_collective_message_size("allgather", x, "F", all_gather_group)
+            # _log_collective_message_size("allgather", x, "F", all_gather_group)
             H = _gather(x, dim=0, process_group=all_gather_group)
             ax.get_timers().stop("Allgather F")
             H = H.reshape(local_features_shape)

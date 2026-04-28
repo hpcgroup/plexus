@@ -5,8 +5,16 @@ import torch.distributed as dist
 from axonn import axonn as ax
 from axonn.intra_layer.communication import Gather, _all_reduce
 from plexus import plexus as plx
+from plexus.gcn_conv import pccl_all_reduce
 from plexus.utils.general import pad_dimension, get_process_groups_info
 from plexus.utils.matmul_tuning import tuned_matmul
+
+
+def _sync_all_reduce(tensor, process_group):
+    if plx.use_pccl_allreduce:
+        pccl_all_reduce(tensor, process_group)
+    else:
+        _all_reduce(tensor, process_group)
 
 
 class Plexus3DLinearFunction(torch.autograd.Function):
@@ -31,7 +39,7 @@ class Plexus3DLinearFunction(torch.autograd.Function):
         out = tuned_matmul(x, weight.t(), matmul_name + " X * W")
         ax.get_timers().stop(matmul_name + " X * W")
         
-        _all_reduce(out, k_group)
+        _sync_all_reduce(out, k_group)
 
         if bias is not None:
             ax.get_timers().start("OUT + BIAS")
@@ -137,16 +145,13 @@ class Plexus3DLinearFunction(torch.autograd.Function):
                     grad_bias.div_(row_world)
 
         else:
-            # =============================================================
-            # ORIGINAL serial path (unchanged)
-            # =============================================================
             if ctx.needs_input_grad[0]:
                 ax.get_timers().start(ctx.matmul_name + " GRAD_X")
                 grad_x = tuned_matmul(
                     grad_output, weight, ctx.matmul_name + " GRAD_X"
                 )
                 ax.get_timers().stop(ctx.matmul_name + " GRAD_X")
-                _all_reduce(grad_x, ctx.col_group)
+                _sync_all_reduce(grad_x, ctx.col_group)
 
             if ctx.needs_input_grad[1]:
                 ax.get_timers().start(ctx.matmul_name + " GRAD_W")
@@ -154,7 +159,7 @@ class Plexus3DLinearFunction(torch.autograd.Function):
                     grad_output.t(), x, ctx.matmul_name + " GRAD_W"
                 )
                 ax.get_timers().stop(ctx.matmul_name + " GRAD_W")
-                _all_reduce(grad_weight, ctx.row_group)
+                _sync_all_reduce(grad_weight, ctx.row_group)
                 if plx.avg_grad:
                     row_world = dist.get_world_size(ctx.row_group)
                     if row_world > 1:
@@ -162,7 +167,7 @@ class Plexus3DLinearFunction(torch.autograd.Function):
 
             if ctx.has_bias and ctx.needs_input_grad[2]:
                 grad_bias = grad_output.sum(dim=0)
-                _all_reduce(grad_bias, ctx.row_group)
+                _sync_all_reduce(grad_bias, ctx.row_group)
                 if plx.avg_grad:
                     row_world = dist.get_world_size(ctx.row_group)
                     if row_world > 1:

@@ -15,6 +15,8 @@ module load PrgEnv-gnu cray-mpich craype-accel-nvidia80
 module load gpu
 source /pscratch/sd/e/egencer/plexus/plexus-env/bin/activate
 
+export PLEXUS_USE_PCCL_ALLREDUCE=1
+
 NNODES="${SLURM_NNODES:-${SLURM_JOB_NUM_NODES:-}}"
 GPUS_PER_NODE=4
 
@@ -75,6 +77,13 @@ use_bf16_spmm=0
 use_bf16_gemm=0
 use_pccl=${PLEXUS_USE_PCCL_ALLREDUCE:-0}
 
+# overlap flags for TP allreduces (uncomment to enable async overlap,
+# which bypasses the PCCL sync path):
+# OVERLAP_FLAGS="\
+#     --overlap_fwd_comm \
+#     --overlap_bwd_comm \
+#     --overlap_linear_bwd \
+# "
 OVERLAP_FLAGS=""
 
 LOWP_FLAGS=""
@@ -123,4 +132,4 @@ SCRIPT="$TRAIN_FILE \
     echo "NNODES=${NNODES} GPUS_PER_NODE=${GPUS_PER_NODE} GPUS=${GPUS}"
     echo "ratio=${ratio} G_DATA=${G_DATA} lr=${lr} allreduce_lowp=${allreduce_lowp} allreduce_lowp_dtype=${allreduce_lowp_dtype}"
     echo $run_cmd
-    eval $run_cmd 2>&1 | tee strong/papers-100m/papers_G_INTRA_R${G_INTRA_R}_G_INTRA_C${G_INTRA_C}_G_INTRA_D${G_INTRA_D}_G_DATA${G_DATA}_ratio${ratio}.log
+    eval $run_cmd 2>&1 | tee strong/papers-100m/papers_G_INTRA_R${G_INTRA_R}_G_INTRA_C${G_INTRA_C}_G_INTRA_D${G_INTRA_D}_G_DATA${G_DATA}_ratio${ratio}_pccl.log

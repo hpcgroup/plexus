@@ -13,3 +13,5 @@ __pycache__/
 logs/
 data/
 dataset/
+*.csv
+/strong/
