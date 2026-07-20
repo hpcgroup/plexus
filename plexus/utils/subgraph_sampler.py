@@ -149,6 +149,137 @@ def sample_nodes(
     return perm[:batch_size]
 
 
+def _make_generator(seed: int, device: Optional[torch.device]):
+    if device is None:
+        gen_device = torch.device("cpu")
+        out_device = None
+    else:
+        out_device = device
+        gen_device = device if device.type == "cuda" else torch.device("cpu")
+    gen = torch.Generator(device=gen_device)
+    gen.manual_seed(int(seed))
+    return gen, out_device
+
+
+def sample_nodes_epoch_perm(
+    num_nodes: int,
+    batch_size: int,
+    seed: int,
+    epoch: int,
+    chunk: int,
+    device: Optional[torch.device] = None,
+) -> torch.Tensor:
+    """Chunk `chunk` of a per-epoch random permutation (without-replacement
+    across steps). P[u,v in the same chunk] = (B-1)/(N-1) exactly, so the
+    uniform 1/p edge rescaling remains valid. Caller must keep
+    chunk < floor(num_nodes / batch_size)."""
+    gen, out_device = _make_generator(int(seed) + int(epoch) * 7919, device)
+    perm = torch.randperm(num_nodes, generator=gen, device=out_device)
+    start = int(chunk) * int(batch_size)
+    return perm[start : start + int(batch_size)]
+
+
+def sample_nodes_hub_anchor(
+    num_nodes: int,
+    batch_size: int,
+    hub_ids: torch.Tensor,
+    hub_mask: torch.Tensor,
+    seed: int,
+    step: int,
+    device: Optional[torch.device] = None,
+    epoch: Optional[int] = None,
+    chunk: Optional[int] = None,
+) -> torch.Tensor:
+    """S = fixed top-degree hub set (always included) plus a uniform sample of
+    the remaining nodes. With epoch/chunk given, the uniform part is a chunk of
+    a per-epoch permutation over non-hub nodes instead of an independent draw."""
+    rest_size = int(batch_size) - int(hub_ids.numel())
+    if rest_size <= 0:
+        return hub_ids
+    if epoch is not None and chunk is not None:
+        gen, out_device = _make_generator(int(seed) + int(epoch) * 7919, device)
+    else:
+        gen, out_device = _make_generator(int(seed) + int(step), device)
+    perm = torch.randperm(num_nodes, generator=gen, device=out_device)
+    rest_all = perm[~hub_mask[perm]]
+    if epoch is not None and chunk is not None:
+        start = int(chunk) * rest_size
+        rest = rest_all[start : start + rest_size]
+    else:
+        rest = rest_all[:rest_size]
+    return torch.cat([hub_ids.to(rest.device), rest])
+
+
+def sample_nodes_train_hub(
+    num_nodes: int,
+    train_ids: torch.Tensor,
+    target_chunk_size: int,
+    hub_ids: torch.Tensor,
+    uniform_size: int,
+    seed: int,
+    epoch: int,
+    chunk: int,
+    step: int,
+    device: Optional[torch.device] = None,
+    src_seed: Optional[int] = None,
+) -> torch.Tensor:
+    """Train-anchored batch: one chunk of a per-epoch permutation over the
+    TRAIN nodes (loss targets; every train node is a target exactly once per
+    epoch) + fixed hub anchors + a uniform draw of extra aggregation sources.
+    Work per epoch scales with |train| + sources instead of |V|.
+    src_seed lets DP groups draw DIFFERENT uniform sources (targets must keep
+    the shared seed so their chunks stay disjoint across groups)."""
+    gen_t, out_device = _make_generator(int(seed) + int(epoch) * 7919, device)
+    perm_t = torch.randperm(int(train_ids.numel()), generator=gen_t, device=out_device)
+    start = int(chunk) * int(target_chunk_size)
+    targets = train_ids[perm_t[start : start + int(target_chunk_size)]]
+    parts = [targets, hub_ids.to(targets.device)]
+    if uniform_size > 0:
+        u_seed = int(seed if src_seed is None else src_seed)
+        gen_u, _ = _make_generator(u_seed + 31 + int(step), device)
+        perm_u = torch.randperm(num_nodes, generator=gen_u, device=out_device)
+        parts.append(perm_u[: int(uniform_size)])
+    return torch.unique(torch.cat(parts))
+
+
+def sample_nodes_degree_gumbel(
+    log_weights: torch.Tensor,
+    batch_size: int,
+    seed: int,
+    step: int,
+    device: Optional[torch.device] = None,
+) -> torch.Tensor:
+    """Weighted sampling without replacement via the Gumbel top-k trick:
+    keys = log w + Gumbel noise, take the top-B. All ranks derive the same
+    sample from the shared seed."""
+    gen, _ = _make_generator(int(seed) + int(step), device)
+    u = torch.rand(
+        log_weights.shape[0],
+        generator=gen,
+        device=log_weights.device,
+        dtype=torch.float32,
+    )
+    eps = 1e-20
+    gumbel = -torch.log(-torch.log(u.clamp_min(eps)).clamp_min(eps))
+    keys = log_weights + gumbel
+    # stable sort, not topk: CUDA topk breaks float ties nondeterministically
+    # (atomic scheduling), which would let ranks derive different samples and
+    # deadlock the TP group's collectives
+    _, order = torch.sort(keys, descending=True, stable=True)
+    return order[: int(batch_size)]
+
+
+def poisson_inclusion_probs(
+    weights: torch.Tensor,
+    batch_size: int,
+) -> torch.Tensor:
+    """Approximate inclusion probability of weighted without-replacement
+    sampling with budget B: pi_v = 1 - (1 - w_v / W)^B (exact for the
+    Poissonized process). Used for 1/pi edge rescaling and loss reweighting."""
+    w = weights.to(torch.float64)
+    frac = (w / w.sum()).clamp(max=1.0 - 1e-12)
+    pi = 1.0 - torch.exp(float(batch_size) * torch.log1p(-frac))
+    return pi.clamp(min=1e-12, max=1.0).to(torch.float32)
 
 
 def compact_subgraph_csr_native(
@@ -164,6 +295,7 @@ def compact_subgraph_csr_native(
     self_col_compact: Optional[torch.Tensor] = None,
     return_edges: bool = False,
     enable_timers: bool = True,
+    col_scale: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     device = csr.device
     row_count = int(row_idx.numel())
@@ -265,8 +397,7 @@ def compact_subgraph_csr_native(
     if enable_timers:
         ax.get_timers().start("compact csr: edge scale")
     if (
-        edge_scale is not None
-        and edge_scale != 1.0
+        (col_scale is not None or (edge_scale is not None and edge_scale != 1.0))
         and val_compact.numel() > 0
     ):
         if self_col_compact is not None and self_col_compact.numel() > 0:
@@ -279,7 +410,16 @@ def compact_subgraph_csr_native(
             col_global = col_idx[col_compact] + int(col_offset)
             non_self = row_global != col_global
         if non_self.any():
-            val_compact[non_self] = val_compact[non_self] * float(edge_scale)
+            if col_scale is not None:
+                # Per-node inverse inclusion probability, indexed by global
+                # column id. Self-loops keep their original weight.
+                if col_scale.device != device:
+                    col_scale = col_scale.to(device=device)
+                col_global_scale = col_idx[col_compact] + int(col_offset)
+                factors = col_scale[col_global_scale].to(val_compact.dtype)
+                val_compact[non_self] = val_compact[non_self] * factors[non_self]
+            else:
+                val_compact[non_self] = val_compact[non_self] * float(edge_scale)
     if enable_timers:
         ax.get_timers().stop("compact csr: edge scale")
 
@@ -409,6 +549,7 @@ def _prepare_compact_layout(
     row_starts: Sequence[int],
     col_starts: Sequence[int],
     edge_scale: Optional[float],
+    col_scale: Optional[torch.Tensor] = None,
 ) -> tuple[
     List[Optional[torch.Tensor]],
     List[Optional[torch.Tensor]],
@@ -428,7 +569,7 @@ def _prepare_compact_layout(
     col_tag_vals_rows: List[Optional[int]] = [None] * num_layouts
     self_cols_rows: List[Optional[torch.Tensor]] = [None] * num_layouts
     self_cols_cols: List[Optional[torch.Tensor]] = [None] * num_layouts
-    need_self = edge_scale is not None and edge_scale != 1.0
+    need_self = (edge_scale is not None and edge_scale != 1.0) or col_scale is not None
     need_adj_t_build = not _USE_ADJ_T_TRANSPOSE and not _USE_ADJ_T_DIRECT
     for layout_idx in range(num_layouts):
         row_idx = row_indices[layout_idx]
@@ -506,6 +647,7 @@ def _build_compact_shard(
     row_start: int,
     col_start: int,
     edge_scale: Optional[float],
+    col_scale: Optional[torch.Tensor],
     col_map_cols: Optional[torch.Tensor],
     col_tag_cols: Optional[torch.Tensor],
     col_tag_val_cols: Optional[int],
@@ -530,6 +672,7 @@ def _build_compact_shard(
             self_col_compact=self_cols_rows,
             return_edges=True,
             enable_timers=enable_timers,
+            col_scale=col_scale,
         )
         if enable_timers:
             ax.get_timers().start("compact csr: adjt direct")
@@ -556,6 +699,7 @@ def _build_compact_shard(
         col_tag_value=col_tag_val_cols,
         self_col_compact=self_cols_rows,
         enable_timers=enable_timers,
+        col_scale=col_scale,
     )
     if _USE_ADJ_T_TRANSPOSE:
         if enable_timers:
@@ -565,6 +709,12 @@ def _build_compact_shard(
             ax.get_timers().stop("compact csr: transpose")
         return adj_new, adj_t_new
 
+    if col_scale is not None:
+        raise NotImplementedError(
+            "col_scale requires PLEXUS_COMPACT_ADJ_T_DIRECT=1 or "
+            "PLEXUS_COMPACT_TRANSPOSE_T=1; the separate adj_t build path would "
+            "apply per-column factors to the wrong axis."
+        )
     adj_t_new = compact_subgraph_csr_native(
         adj_t,
         col_idx,
@@ -591,6 +741,7 @@ def build_compact_adj_shards(
     col_starts: Sequence[int],
     edge_scale: Optional[float] = None,
     enable_timers: bool = True,
+    col_scale: Optional[torch.Tensor] = None,
 ) -> List[Tuple[torch.Tensor, torch.Tensor]]:
     if len(row_indices) == 0:
         return list(adj_shards)
@@ -612,6 +763,7 @@ def build_compact_adj_shards(
         row_starts,
         col_starts,
         edge_scale,
+        col_scale=col_scale,
     )
     if enable_timers:
         ax.get_timers().stop("compact layout prep")
@@ -630,6 +782,7 @@ def build_compact_adj_shards(
             row_starts[layout_idx],
             col_starts[layout_idx],
             edge_scale,
+            col_scale,
             col_maps_cols[layout_idx],
             col_tags_cols[layout_idx],
             col_tag_vals_cols[layout_idx],

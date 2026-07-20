@@ -31,7 +31,7 @@ class TensorParallelCrossEntropy(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, logits, target, num_layers, num_nodes, num_classes):
+    def forward(ctx, logits, target, num_layers, num_nodes, num_classes, node_weight=None):
         ax.get_timers().start("cross entropy fwd")
 
         # select appropriate process groups for last layer
@@ -104,8 +104,27 @@ class TensorParallelCrossEntropy(torch.autograd.Function):
             softmax[invalid_nodes, :] = 0.0
             target[invalid_nodes, :] = 0
 
+        # optional per-node loss weights (e.g., 1/pi for non-uniform sampling);
+        # weights of invalid (padded or masked) nodes are zeroed
+        weight_valid = None
+        if node_weight is not None:
+            if node_weight.ndim != 1:
+                node_weight = node_weight.reshape(-1)
+            if node_weight.shape[0] != target.shape[0]:
+                raise ValueError(
+                    f"node_weight must match target length "
+                    f"(got {node_weight.shape[0]} vs {target.shape[0]})"
+                )
+            weight_valid = node_weight.to(softmax.dtype).clone()
+            if invalid_nodes.any():
+                weight_valid[invalid_nodes] = 0.0
+
         # save softmax and target for backward pass
-        ctx.save_for_backward(softmax, target)
+        if weight_valid is not None:
+            ctx.save_for_backward(softmax, target, weight_valid)
+        else:
+            ctx.save_for_backward(softmax, target)
+        ctx.has_node_weight = weight_valid is not None
 
         # calculate loss
         epsilon = 1e-9
@@ -119,15 +138,23 @@ class TensorParallelCrossEntropy(torch.autograd.Function):
         # sum losses for all nodes and then all reduce across all nodes
         ctx.num_nodes = num_nodes
 
+        if weight_valid is not None:
+            loss = loss * weight_valid
         loss_sum = torch.sum(loss)
         # ax.get_timers().start("loss_sum all reduce")
         dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=process_groups[0])
         # ax.get_timers().stop("loss_sum all reduce")
 
-        # average over valid (non-padded, non-masked) nodes
-        valid_count = (~invalid_nodes).sum().to(torch.long)
-        dist.all_reduce(valid_count, op=dist.ReduceOp.SUM, group=process_groups[0])
-        ctx.loss_divisor = valid_count.clamp_min(1)
+        if weight_valid is not None:
+            # self-normalized weighted mean: divide by the total sampled weight
+            weight_sum = weight_valid.sum()
+            dist.all_reduce(weight_sum, op=dist.ReduceOp.SUM, group=process_groups[0])
+            ctx.loss_divisor = weight_sum.clamp_min(1e-12)
+        else:
+            # average over valid (non-padded, non-masked) nodes
+            valid_count = (~invalid_nodes).sum().to(torch.long)
+            dist.all_reduce(valid_count, op=dist.ReduceOp.SUM, group=process_groups[0])
+            ctx.loss_divisor = valid_count.clamp_min(1)
 
         avg_loss = loss_sum / ctx.loss_divisor
 
@@ -139,13 +166,21 @@ class TensorParallelCrossEntropy(torch.autograd.Function):
     def backward(ctx, grad_output):
         # calculate gradient of loss with respect to the logits
         ax.get_timers().start("cross entropy bwd")
-        softmax, target = ctx.saved_tensors
-        grad_input = (softmax - target) / ctx.loss_divisor
+        if ctx.has_node_weight:
+            softmax, target, weight_valid = ctx.saved_tensors
+            grad_input = (
+                (softmax - target) * weight_valid.unsqueeze(1) / ctx.loss_divisor
+            )
+        else:
+            softmax, target = ctx.saved_tensors
+            grad_input = (softmax - target) / ctx.loss_divisor
         ax.get_timers().stop("cross entropy bwd")
-        return grad_input * grad_output, None, None, None, None
+        return grad_input * grad_output, None, None, None, None, None
 
 
-def parallel_cross_entropy(logits, target, groups, num_nodes, num_classes, node_mask=None):
+def parallel_cross_entropy(
+    logits, target, groups, num_nodes, num_classes, node_mask=None, node_weight=None
+):
     if node_mask is not None:
         if node_mask.ndim != 1:
             node_mask = node_mask.reshape(-1)
@@ -156,7 +191,7 @@ def parallel_cross_entropy(logits, target, groups, num_nodes, num_classes, node_
         target = target.clone()
         target[~node_mask.to(torch.bool)] = -1
     return TensorParallelCrossEntropy.apply(
-        logits, target, groups, num_nodes, num_classes
+        logits, target, groups, num_nodes, num_classes, node_weight
     )
 
 
@@ -167,7 +202,7 @@ class TensorParallelBCEWithLogits(torch.autograd.Function):
     """
 
     @staticmethod
-    def forward(ctx, logits, target, num_layers, num_nodes, num_classes):
+    def forward(ctx, logits, target, num_layers, num_nodes, num_classes, node_weight=None):
         ax.get_timers().start("bce fwd")
 
         groups = _loss_groups(num_layers)
@@ -207,17 +242,34 @@ class TensorParallelBCEWithLogits(torch.autograd.Function):
             logits, target_filled, reduction="none"
         )
         labeled_f = labeled.to(per_entry.dtype)
+        if node_weight is not None:
+            # fold per-node 1/pi weights into the labeled mask; the rest of the
+            # (self-normalized) weighted-mean math then falls out unchanged
+            if node_weight.ndim != 1:
+                node_weight = node_weight.reshape(-1)
+            if node_weight.shape[0] != labeled_f.shape[0]:
+                raise ValueError(
+                    f"node_weight must match row count "
+                    f"(got {node_weight.shape[0]} vs {labeled_f.shape[0]})"
+                )
+            labeled_f = labeled_f * node_weight.to(per_entry.dtype).unsqueeze(1)
         per_entry = per_entry * labeled_f
 
-        # Reduce total loss and total labeled count across both class and node groups.
+        # Reduce total loss and total (weighted) labeled count across both groups.
         loss_sum = per_entry.sum()
         dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=process_groups[1])
         dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM, group=process_groups[0])
 
-        labeled_count = labeled.sum().to(torch.long)
-        dist.all_reduce(labeled_count, op=dist.ReduceOp.SUM, group=process_groups[1])
-        dist.all_reduce(labeled_count, op=dist.ReduceOp.SUM, group=process_groups[0])
-        ctx.loss_divisor = labeled_count.clamp_min(1)
+        if node_weight is not None:
+            weight_sum = labeled_f.sum()
+            dist.all_reduce(weight_sum, op=dist.ReduceOp.SUM, group=process_groups[1])
+            dist.all_reduce(weight_sum, op=dist.ReduceOp.SUM, group=process_groups[0])
+            ctx.loss_divisor = weight_sum.clamp_min(1e-12)
+        else:
+            labeled_count = labeled.sum().to(torch.long)
+            dist.all_reduce(labeled_count, op=dist.ReduceOp.SUM, group=process_groups[1])
+            dist.all_reduce(labeled_count, op=dist.ReduceOp.SUM, group=process_groups[0])
+            ctx.loss_divisor = labeled_count.clamp_min(1)
 
         sigmoid = torch.sigmoid(logits)
         ctx.save_for_backward(sigmoid, target_filled, labeled_f)
@@ -233,10 +285,10 @@ class TensorParallelBCEWithLogits(torch.autograd.Function):
         sigmoid, target_filled, labeled_f = ctx.saved_tensors
         grad_input = (sigmoid - target_filled) * labeled_f / ctx.loss_divisor
         ax.get_timers().stop("bce bwd")
-        return grad_input * grad_output, None, None, None, None
+        return grad_input * grad_output, None, None, None, None, None
 
 
-def parallel_bce_with_logits(logits, target, groups, num_nodes, num_classes, node_mask=None):
+def parallel_bce_with_logits(logits, target, groups, num_nodes, num_classes, node_mask=None, node_weight=None):
     if node_mask is not None:
         if node_mask.ndim != 1:
             node_mask = node_mask.reshape(-1)
@@ -246,4 +298,4 @@ def parallel_bce_with_logits(logits, target, groups, num_nodes, num_classes, nod
             )
         target = target.clone()
         target[~node_mask.to(torch.bool)] = float("nan")
-    return TensorParallelBCEWithLogits.apply(logits, target, groups, num_nodes, num_classes)
+    return TensorParallelBCEWithLogits.apply(logits, target, groups, num_nodes, num_classes, node_weight)

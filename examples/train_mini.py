@@ -24,6 +24,11 @@ from plexus.utils.general import set_seed, print_axonn_timer_data, get_process_g
 from plexus.utils.subgraph_sampler import (
     compute_steps_per_epoch,
     sample_nodes,
+    sample_nodes_epoch_perm,
+    sample_nodes_hub_anchor,
+    sample_nodes_train_hub,
+    sample_nodes_degree_gumbel,
+    poisson_inclusion_probs,
     build_layout_indices,
     build_compact_adj_shards,
 )
@@ -145,6 +150,112 @@ def create_parser():
         action="store_true",
         default=False,
         help="Apply unbiased edge scaling for node sampling (scale non-self edges by 1/p).",
+    )
+    parser.add_argument(
+        "--minibatch_sampler",
+        type=str,
+        default="uniform",
+        choices=["uniform", "hub", "degree", "train_hub"],
+        help=(
+            "Node sampling strategy: 'uniform' (default, current behavior), "
+            "'hub' (always include top-degree hub nodes, fill the rest "
+            "uniformly), or 'degree' (weighted sampling with probability "
+            "proportional to degree^alpha via Gumbel top-B). Non-uniform "
+            "samplers reweight the loss by 1/pi and, with "
+            "--minibatch_unbiased, rescale each non-self edge by 1/pi of its "
+            "source node."
+        ),
+    )
+    parser.add_argument(
+        "--minibatch_hub_frac",
+        type=float,
+        default=0.2,
+        help="Fraction of the batch budget reserved for hub nodes (sampler=hub).",
+    )
+    parser.add_argument(
+        "--minibatch_degree_alpha",
+        type=float,
+        default=1.0,
+        help="Exponent alpha in sampling weight (degree+1)^alpha (sampler=degree).",
+    )
+    parser.add_argument(
+        "--minibatch_train_steps",
+        type=int,
+        default=10,
+        help=(
+            "sampler=train_hub: steps per epoch; each epoch covers every TRAIN "
+            "node exactly once as a loss target. --minibatch_ratio then sizes "
+            "the extra uniform source draw and --minibatch_hub_frac the hub "
+            "anchors (as a fraction of that draw)."
+        ),
+    )
+    parser.add_argument(
+        "--minibatch_dp_diverse_src",
+        action="store_true",
+        default=False,
+        help=(
+            "sampler=train_hub with G_data>1: each DP group draws its own "
+            "uniform sources (targets stay disjoint via the shared seed)."
+        ),
+    )
+    parser.add_argument(
+        "--minibatch_epoch_perm",
+        action="store_true",
+        default=False,
+        help=(
+            "Draw batches as chunks of one per-epoch random permutation shared "
+            "across DP groups (full coverage per epoch, exact same 1/p "
+            "rescaling). Supported for sampler=uniform and sampler=hub."
+        ),
+    )
+    parser.add_argument(
+        "--eval_degree_buckets",
+        action="store_true",
+        default=False,
+        help="Report eval accuracy stratified by node degree buckets.",
+    )
+    parser.add_argument(
+        "--grad_clip_value",
+        type=float,
+        default=None,
+        help=(
+            "Clip each gradient element to [-v, v] before the optimizer step. "
+            "Element-wise clipping is exact under sharded parameters (no "
+            "cross-group communication needed)."
+        ),
+    )
+    parser.add_argument(
+        "--lr_schedule",
+        type=str,
+        default="constant",
+        choices=["constant", "cosine"],
+        help="LR schedule: constant (default) or cosine annealing over num_epochs.",
+    )
+    parser.add_argument(
+        "--lr_warmup_epochs",
+        type=int,
+        default=0,
+        help="Linear LR warmup over this many epochs before the cosine phase.",
+    )
+    parser.add_argument(
+        "--grad_variance_ratios",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated ratios, e.g. '0.02,0.05,0.1'. With "
+            "--grad_variance_samples, measure uniform-sampling gradient "
+            "variance at ALL these ratios on the same frozen parameters."
+        ),
+    )
+    parser.add_argument(
+        "--grad_variance_samples",
+        type=int,
+        default=0,
+        help=(
+            "After training, hold parameters fixed and draw K fresh mini-batches "
+            "to estimate gradient variance (relative variance = sum Var[g] / "
+            "sum E[g]^2). 0 disables."
+        ),
     )
     parser.add_argument(
         "--minibatch_compact",
@@ -419,6 +530,8 @@ def train(
     layout_metadata=None,
     test: bool = False,
     vectorize_dp_grad: bool = False,
+    node_weight=None,
+    grad_clip_value: float | None = None,
 ):
     # set to training mode
     model.train()
@@ -438,6 +551,7 @@ def train(
             num_nodes,
             num_classes,
             node_mask=train_mask,
+            node_weight=node_weight,
         )
     else:
         # Single-label: cross-entropy over classes.
@@ -448,6 +562,7 @@ def train(
             num_nodes,
             num_classes,
             node_mask=train_mask,
+            node_weight=node_weight,
         )
 
     # backward pass
@@ -458,6 +573,9 @@ def train(
     ax.get_timers().start("sync_data_parallel_gradients")
     _sync_data_parallel_gradients(optimizer, vectorize=vectorize_dp_grad)
     ax.get_timers().stop("sync_data_parallel_gradients")
+    if grad_clip_value is not None:
+        params = [p for g in optimizer.param_groups for p in g["params"]]
+        torch.nn.utils.clip_grad_value_(params, grad_clip_value)
     # update weights
     optimizer.step()
 
@@ -484,6 +602,259 @@ def _edge_scale_value(num_nodes: int, batch_size: int) -> float | None:
         p_neighbor = (batch_size - 1) / (num_nodes - 1)
         return 1.0 / p_neighbor
     return None
+
+
+def _compute_global_degrees(adj_shards, data_loader, num_nodes: int) -> torch.Tensor:
+    """Non-self degree of every node, identical on all ranks.
+
+    Each rank counts the nonzeros of its layout-0 adjacency shard per global
+    row; a one-time all-reduce over the TP group sums the column blocks. The
+    shard grid is replicated along the remaining 3D axis, so the sum
+    overcounts by that replication factor.
+    """
+    adj = adj_shards[0][0]
+    crow = adj.crow_indices()
+    counts = (crow[1:] - crow[:-1]).to(torch.int64)
+
+    if plx.use_3d_linear:
+        dim1_letter, dim2_letter = "y", "x"
+    else:
+        dim1_letter, dim2_letter = "z", "x"
+    rep_letter = ({"x", "y", "z"} - {dim1_letter, dim2_letter}).pop()
+    num_gpus, _, _ = get_process_groups_info((dim1_letter, dim2_letter, rep_letter))
+    rep = int(num_gpus[2])
+
+    deg = torch.zeros(num_nodes, dtype=torch.int64, device=adj.device)
+    row_start = int(data_loader.adj_dim1_start[0])
+    row_stop = int(data_loader.adj_dim1_stop[0])
+    hi = min(row_stop, num_nodes)
+    if hi > row_start:
+        deg[row_start:hi] = counts[: hi - row_start]
+    dist.all_reduce(deg, op=dist.ReduceOp.SUM, group=ax.comm_handle.intra_layer_group)
+    deg = torch.div(deg, rep, rounding_mode="floor")
+    # remove the single self-loop each node carries
+    deg = (deg - 1).clamp_min(0)
+    return deg.to(torch.float32)
+
+
+def _slice_node_vector(
+    vec_global: torch.Tensor, start: int, stop: int, num_nodes: int, fill: float
+) -> torch.Tensor:
+    out = vec_global.new_full((stop - start,), fill)
+    hi = min(stop, num_nodes)
+    if hi > start:
+        out[: hi - start] = vec_global[start:hi]
+    return out
+
+
+def _compute_global_train_mask(
+    train_mask_local: torch.Tensor, labels_start: int, labels_stop: int, num_nodes: int
+) -> torch.Tensor:
+    """Assemble the global train mask from per-rank label shards (one-time)."""
+    mask = torch.zeros(num_nodes, dtype=torch.int32, device=train_mask_local.device)
+    hi = min(labels_stop, num_nodes)
+    if hi > labels_start:
+        mask[labels_start:hi] = train_mask_local[: hi - labels_start].to(torch.int32)
+    dist.all_reduce(mask, op=dist.ReduceOp.MAX, group=ax.comm_handle.intra_layer_group)
+    return mask.to(torch.bool)
+
+
+def _build_sampler_ctx(
+    args,
+    degrees: torch.Tensor | None,
+    num_nodes: int,
+    batch_size: int,
+    seed_base: int,
+    minibatch_seed: int,
+    dp_rank: int,
+    labels_start: int,
+    labels_stop: int,
+    train_mask_local: torch.Tensor | None = None,
+) -> dict:
+    """Precompute static state for non-uniform / epoch-permutation sampling.
+
+    All quantities derive from static graph statistics and shared seeds, so
+    every rank builds identical tensors without communication (degrees were
+    all-reduced once at initialization).
+    """
+    ctx = {
+        "type": args.minibatch_sampler,
+        "epoch_perm": bool(args.minibatch_epoch_perm),
+        "batch_size": int(batch_size),
+        "seed_base": int(seed_base),
+        "minibatch_seed": int(minibatch_seed),
+        "G_data": int(args.G_data),
+        "dp_rank": int(dp_rank),
+        "hub_ids": None,
+        "hub_mask": None,
+        "log_weights": None,
+        "col_scale": None,
+        "node_weight_local": None,
+    }
+    if args.minibatch_sampler == "uniform":
+        return ctx
+
+    assert degrees is not None
+    pi = None
+    if args.minibatch_sampler == "hub":
+        k = int(args.minibatch_hub_frac * batch_size)
+        k = max(1, min(k, batch_size - 1, num_nodes - 1))
+        # stable sort so hub selection breaks degree ties identically everywhere
+        _, order = torch.sort(degrees, descending=True, stable=True)
+        hub_ids = order[:k].contiguous()
+        hub_mask = torch.zeros(num_nodes, dtype=torch.bool, device=degrees.device)
+        hub_mask[hub_ids] = True
+        p_rest = (batch_size - k) / max(1, (num_nodes - k))
+        pi = torch.full(
+            (num_nodes,), p_rest, dtype=torch.float32, device=degrees.device
+        )
+        pi[hub_ids] = 1.0
+        ctx["hub_ids"] = hub_ids
+        ctx["hub_mask"] = hub_mask
+        ctx["hub_k"] = k
+    elif args.minibatch_sampler == "degree":
+        w = (degrees + 1.0).pow(args.minibatch_degree_alpha)
+        pi = poisson_inclusion_probs(w, batch_size)
+        ctx["log_weights"] = torch.log(w)
+    elif args.minibatch_sampler == "train_hub":
+        assert train_mask_local is not None
+        gmask = _compute_global_train_mask(
+            train_mask_local, labels_start, labels_stop, num_nodes
+        )
+        train_ids = gmask.nonzero(as_tuple=False).squeeze(1).contiguous()
+        n_train = int(train_ids.numel())
+        T = max(1, int(args.minibatch_train_steps))
+        chunks_total = T * max(1, int(args.G_data))
+        b_target = max(1, math.ceil(n_train / chunks_total))
+        b_uniform = int(batch_size)  # --minibatch_ratio sizes the source draw
+        k = int(args.minibatch_hub_frac * b_uniform)
+        k = max(0, min(k, num_nodes - 1))
+        _, order = torch.sort(degrees, descending=True, stable=True)
+        hub_ids = order[:k].contiguous()
+        ctx["train_ids"] = train_ids
+        ctx["hub_ids"] = hub_ids
+        ctx["b_target"] = b_target
+        ctx["b_uniform"] = b_uniform
+        ctx["train_steps"] = T
+        ctx["dp_diverse_src"] = bool(args.minibatch_dp_diverse_src)
+        # static inclusion probs: targets p_t (train only), uniform p_u, hubs 1
+        p_t = min(1.0, b_target * chunks_total / max(1, n_train))
+        p_u = min(1.0, b_uniform / num_nodes)
+        pi = torch.full(
+            (num_nodes,), p_u, dtype=torch.float32, device=degrees.device
+        )
+        # per-step target inclusion for train nodes: b_target/n_train, plus p_u
+        p_t_step = b_target / max(1, n_train)
+        pi[gmask] = 1.0 - (1.0 - p_t_step) * (1.0 - p_u)
+        if k > 0:
+            pi[hub_ids] = 1.0
+        pi = pi.clamp(1e-12, 1.0)
+        # unweighted loss: each train node is a target exactly once per epoch
+        inv_pi = 1.0 / pi
+        if args.minibatch_unbiased:
+            ctx["col_scale"] = inv_pi
+        ctx["node_weight_local"] = None
+        return ctx
+    else:
+        raise ValueError(f"Unknown sampler {args.minibatch_sampler!r}")
+
+    inv_pi = 1.0 / pi
+    if args.minibatch_unbiased:
+        ctx["col_scale"] = inv_pi
+    ctx["node_weight_local"] = _slice_node_vector(
+        inv_pi, labels_start, labels_stop, num_nodes, fill=0.0
+    )
+    return ctx
+
+
+def _sample_minibatch_nodes(
+    sampler_ctx: dict | None,
+    num_nodes: int,
+    minibatch_nodes: int | None,
+    minibatch_ratio: float | None,
+    minibatch_seed: int,
+    global_step: int,
+    attempt: int,
+    steps_per_epoch: int,
+    device: torch.device,
+) -> torch.Tensor:
+    if sampler_ctx is None or (
+        sampler_ctx["type"] == "uniform" and not sampler_ctx["epoch_perm"]
+    ):
+        return sample_nodes(
+            num_nodes,
+            batch_size=minibatch_nodes,
+            ratio=minibatch_ratio,
+            seed=minibatch_seed,
+            step=global_step + attempt,
+            device=device,
+        )
+
+    stype = sampler_ctx["type"]
+    batch_size = sampler_ctx["batch_size"]
+    epoch = global_step // max(1, steps_per_epoch)
+    local_chunk = global_step % max(1, steps_per_epoch)
+    chunk = local_chunk * sampler_ctx["G_data"] + sampler_ctx["dp_rank"]
+
+    if stype == "uniform":
+        # epoch permutation shared across DP groups; chunks are disjoint
+        return sample_nodes_epoch_perm(
+            num_nodes,
+            batch_size,
+            seed=sampler_ctx["seed_base"],
+            epoch=epoch,
+            chunk=chunk,
+            device=device,
+        )
+    if stype == "hub":
+        if sampler_ctx["epoch_perm"]:
+            return sample_nodes_hub_anchor(
+                num_nodes,
+                batch_size,
+                sampler_ctx["hub_ids"],
+                sampler_ctx["hub_mask"],
+                seed=sampler_ctx["seed_base"],
+                step=0,
+                device=device,
+                epoch=epoch,
+                chunk=chunk,
+            )
+        return sample_nodes_hub_anchor(
+            num_nodes,
+            batch_size,
+            sampler_ctx["hub_ids"],
+            sampler_ctx["hub_mask"],
+            seed=sampler_ctx["minibatch_seed"],
+            step=global_step + attempt,
+            device=device,
+        )
+    if stype == "train_hub":
+        return sample_nodes_train_hub(
+            num_nodes,
+            sampler_ctx["train_ids"],
+            sampler_ctx["b_target"],
+            sampler_ctx["hub_ids"],
+            sampler_ctx["b_uniform"],
+            seed=sampler_ctx["seed_base"],
+            epoch=epoch,
+            chunk=chunk,
+            step=global_step + attempt,
+            device=device,
+            src_seed=(
+                sampler_ctx["minibatch_seed"]
+                if sampler_ctx.get("dp_diverse_src")
+                else None
+            ),
+        )
+    if stype == "degree":
+        return sample_nodes_degree_gumbel(
+            sampler_ctx["log_weights"],
+            batch_size,
+            seed=sampler_ctx["minibatch_seed"],
+            step=global_step + attempt,
+            device=device,
+        )
+    raise ValueError(f"Unknown sampler {stype!r}")
 
 
 def _scale_csr_non_self(
@@ -540,6 +911,8 @@ def _prepare_compact_minibatch(
     edge_scale: float | None,
     resample_attempts: int = 3,
     enable_timers: bool = True,
+    sampler_ctx: dict | None = None,
+    steps_per_epoch: int = 1,
 ) -> (
     tuple[
         torch.Tensor,
@@ -548,20 +921,27 @@ def _prepare_compact_minibatch(
         torch.Tensor | None,
         int,
         dict,
+        torch.Tensor | None,
     ]
     | None
 ):
     timers = ax.get_timers() if enable_timers else None
-    for attempt in range(resample_attempts + 1):
+    # epoch-permutation batches are deterministic; retrying cannot change them
+    deterministic = bool(sampler_ctx is not None and sampler_ctx["epoch_perm"])
+    attempts = 0 if deterministic else resample_attempts
+    for attempt in range(attempts + 1):
         if timers is not None:
             timers.start("sample nodes")
-        sample_idx = sample_nodes(
+        sample_idx = _sample_minibatch_nodes(
+            sampler_ctx,
             num_nodes,
-            batch_size=minibatch_nodes,
-            ratio=minibatch_ratio,
-            seed=minibatch_seed,
-            step=global_step + attempt,
-            device=features.device,
+            minibatch_nodes,
+            minibatch_ratio,
+            minibatch_seed,
+            global_step,
+            attempt,
+            steps_per_epoch,
+            features.device,
         )
         sample_idx, _ = torch.sort(sample_idx)
         if timers is not None:
@@ -618,6 +998,7 @@ def _prepare_compact_minibatch(
         data_loader.adj_dim2_start,
         edge_scale=edge_scale,
         enable_timers=enable_timers,
+        col_scale=sampler_ctx["col_scale"] if sampler_ctx is not None else None,
     )
     if timers is not None:
         timers.stop("compact adj shards")
@@ -633,15 +1014,24 @@ def _prepare_compact_minibatch(
     row_idx_last = row_idx_list[last_layout]
     if timers is not None:
         timers.start("compact label slice")
+    node_weight_local = (
+        sampler_ctx.get("node_weight_local") if sampler_ctx is not None else None
+    )
     if row_idx_last.numel() > 0:
         labels_mb = labels.index_select(0, row_idx_last)
         if train_mask is None:
             train_mask_mb = None
         else:
             train_mask_mb = train_mask.index_select(0, row_idx_last)
+        node_weight_mb = (
+            node_weight_local.index_select(0, row_idx_last)
+            if node_weight_local is not None
+            else None
+        )
     else:
         labels_mb = labels[:0]
         train_mask_mb = None if train_mask is None else train_mask[:0]
+        node_weight_mb = None if node_weight_local is None else node_weight_local[:0]
     if timers is not None:
         timers.stop("compact label slice")
     num_nodes_loss = 2**62
@@ -659,6 +1049,7 @@ def _prepare_compact_minibatch(
         train_mask_mb,
         num_nodes_loss,
         layout_metadata,
+        node_weight_mb,
     )
 
 
@@ -701,6 +1092,8 @@ def _launch_compact_prefetch(
     minibatch_seed: int,
     global_step: int,
     edge_scale: float | None,
+    sampler_ctx: dict | None = None,
+    steps_per_epoch: int = 1,
 ):
     def _worker():
         torch.cuda.set_device(device_index)
@@ -719,6 +1112,8 @@ def _launch_compact_prefetch(
                 global_step=global_step,
                 edge_scale=edge_scale,
                 enable_timers=False,
+                sampler_ctx=sampler_ctx,
+                steps_per_epoch=steps_per_epoch,
             )
             ready_event = torch.cuda.Event(blocking=False)
             ready_event.record(prefetch_stream)
@@ -997,6 +1392,35 @@ def _compute_split_metrics(pred, labels, mask, num_classes, node_group):
     }
 
 
+_DEG_BUCKET_EDGES = (1, 2, 4, 8, 16, 32, 64)
+_DEG_BUCKET_LABELS = ("0", "1", "2-3", "4-7", "8-15", "16-31", "32-63", "64+")
+
+
+def _degree_bucket_metrics(pred, labels, mask, degree_local, node_group):
+    """Accuracy stratified by (non-self) node degree; diagnoses edge starvation."""
+    if mask is None:
+        return None
+    nb = len(_DEG_BUCKET_LABELS)
+    valid = mask.to(torch.bool) & (labels >= 0) & (pred >= 0) & (degree_local >= 0)
+    boundaries = torch.tensor(
+        _DEG_BUCKET_EDGES, device=degree_local.device, dtype=degree_local.dtype
+    )
+    bucket = torch.bucketize(degree_local.clamp(min=0), boundaries)
+    total = torch.zeros(nb, dtype=torch.long, device=pred.device)
+    correct = torch.zeros(nb, dtype=torch.long, device=pred.device)
+    if valid.any():
+        total = torch.bincount(bucket[valid], minlength=nb)
+        corr_mask = valid & (pred == labels)
+        correct = torch.bincount(bucket[corr_mask], minlength=nb)
+    stats = torch.stack([correct, total])
+    dist.all_reduce(stats, op=dist.ReduceOp.SUM, group=node_group)
+    correct, total = stats[0], stats[1]
+    return [
+        (lbl, correct[i].item() / max(1, total[i].item()), int(total[i].item()))
+        for i, lbl in enumerate(_DEG_BUCKET_LABELS)
+    ]
+
+
 @torch.no_grad()
 def evaluate(
     model,
@@ -1008,6 +1432,7 @@ def evaluate(
     num_classes,
     layout_metadata=None,
     multilabel_metric="rocauc",
+    degree_local=None,
 ):
     groups = _loss_groups(model.num_gcn_layers)
     _, _, process_groups = get_process_groups_info(groups)
@@ -1101,12 +1526,28 @@ def evaluate(
             num_classes,
             node_group,
         )
+        if degree_local is not None and results[split] is not None:
+            results[split]["deg_buckets"] = _degree_bucket_metrics(
+                pred,
+                labels,
+                masks.get(split),
+                degree_local,
+                node_group,
+            )
     return results
 
 
 if __name__ == "__main__":
+    if os.environ.get("PLEXUS_DEBUG_HANG"):
+        import faulthandler
+
+        faulthandler.dump_traceback_later(
+            int(os.environ["PLEXUS_DEBUG_HANG"]), exit=True
+        )
     parser = create_parser()
     args = parser.parse_args()
+    if os.environ.get("RANK", "0") == "0":
+        print(f"[args] {vars(args)}", flush=True)
     set_seed(args.seed)
 
     # initialize distributed environment
@@ -1183,6 +1624,21 @@ if __name__ == "__main__":
         lr=args.lr,
         weight_decay=args.weight_decay,
     )
+    lr_scheduler = None
+    if args.lr_schedule == "cosine":
+        warm_ep = max(0, int(args.lr_warmup_epochs))
+        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=max(1, args.num_epochs - warm_ep)
+        )
+        if warm_ep > 0:
+            warmup = torch.optim.lr_scheduler.LinearLR(
+                optimizer, start_factor=0.1, end_factor=1.0, total_iters=warm_ep
+            )
+            lr_scheduler = torch.optim.lr_scheduler.SequentialLR(
+                optimizer, [warmup, cosine], milestones=[warm_ep]
+            )
+        else:
+            lr_scheduler = cosine
 
     dist.barrier(device_ids=[torch.cuda.current_device()])
 
@@ -1265,7 +1721,95 @@ if __name__ == "__main__":
                 edge_scale_global,
             )
             edge_scale_global = None
-    
+
+    # ------- non-uniform / epoch-permutation sampling setup -------
+    sampler_ctx = None
+    degrees = None
+    multilabel = labels.ndim == 2 and labels.size(-1) > 1
+    nonuniform = args.minibatch_sampler != "uniform"
+    if (nonuniform or args.minibatch_epoch_perm) and not use_minibatch:
+        raise ValueError(
+            "--minibatch_sampler/--minibatch_epoch_perm require minibatch "
+            "training (--minibatch_nodes or --minibatch_ratio)."
+        )
+    if nonuniform and args.train_adj:
+        raise NotImplementedError(
+            "--minibatch_sampler hub/degree is not supported with --train_adj."
+        )
+    if args.minibatch_epoch_perm and args.minibatch_sampler == "degree":
+        raise NotImplementedError(
+            "--minibatch_epoch_perm is only supported for uniform and hub samplers."
+        )
+    if nonuniform or args.eval_degree_buckets:
+        degrees = _compute_global_degrees(adj_shards, data_loader, num_nodes)
+
+    if use_minibatch and (nonuniform or args.minibatch_epoch_perm):
+        batch_size_resolved = _minibatch_size(
+            num_nodes,
+            batch_size=args.minibatch_nodes,
+            ratio=args.minibatch_ratio,
+        )
+        seed_base = args.seed if args.minibatch_seed is None else args.minibatch_seed
+        sampler_ctx = _build_sampler_ctx(
+            args,
+            degrees,
+            num_nodes,
+            batch_size_resolved,
+            seed_base=int(seed_base),
+            minibatch_seed=minibatch_seed,
+            dp_rank=dp_rank,
+            labels_start=int(data_loader.labels_start),
+            labels_stop=int(data_loader.labels_stop),
+            train_mask_local=train_mask,
+        )
+        if nonuniform:
+            # per-node 1/pi rescaling replaces the scalar 1/p factor
+            edge_scale_global = None
+        if args.minibatch_sampler == "train_hub":
+            steps_per_epoch = sampler_ctx["train_steps"]
+        if args.minibatch_epoch_perm:
+            if args.minibatch_sampler == "hub":
+                k = sampler_ctx["hub_k"]
+                chunks_total = max(0, (num_nodes - k) // (batch_size_resolved - k))
+            else:
+                chunks_total = num_nodes // batch_size_resolved
+            perm_steps = chunks_total // max(1, args.G_data)
+            if perm_steps < 1:
+                raise ValueError(
+                    "epoch permutation needs at least one chunk per DP group "
+                    f"(chunks_total={chunks_total}, G_data={args.G_data})."
+                )
+            if args.steps_per_epoch is not None:
+                perm_steps = min(perm_steps, max(1, int(args.steps_per_epoch)))
+            steps_per_epoch = perm_steps
+        if dist.get_rank() == 0:
+            print(
+                f"[info] sampler={args.minibatch_sampler} "
+                f"epoch_perm={args.minibatch_epoch_perm} "
+                f"B={batch_size_resolved} steps_per_epoch={steps_per_epoch} "
+                + (
+                    f"hub_k={sampler_ctx['hub_k']} "
+                    if args.minibatch_sampler == "hub"
+                    else ""
+                )
+                + (
+                    f"alpha={args.minibatch_degree_alpha} "
+                    if args.minibatch_sampler == "degree"
+                    else ""
+                )
+                + f"edge_rescale={'per-node 1/pi' if (nonuniform and args.minibatch_unbiased) else ('scalar 1/p' if edge_scale_global is not None else 'none')}"
+            )
+
+    degree_labels_local = None
+    if args.eval_degree_buckets and degrees is not None:
+        degree_labels_local = _slice_node_vector(
+            degrees,
+            int(data_loader.labels_start),
+            int(data_loader.labels_stop),
+            num_nodes,
+            fill=-1.0,
+        )
+
     prof = None
     trace_dir = None
     rank = dist.get_rank()
@@ -1316,6 +1860,8 @@ if __name__ == "__main__":
             minibatch_seed=minibatch_seed,
             global_step=0,
             edge_scale=edge_scale_global,
+            sampler_ctx=sampler_ctx,
+            steps_per_epoch=steps_per_epoch,
         )
 
     # training loop
@@ -1358,6 +1904,8 @@ if __name__ == "__main__":
                             minibatch_seed=minibatch_seed,
                             global_step=global_step + 1,
                             edge_scale=edge_scale_global,
+                            sampler_ctx=sampler_ctx,
+                            steps_per_epoch=steps_per_epoch,
                         )
                         ax.get_timers().stop("prefetch launch")
                     elif i + 1 < args.num_epochs:
@@ -1378,6 +1926,8 @@ if __name__ == "__main__":
                             minibatch_seed=minibatch_seed,
                             global_step=(i + 1) * steps_per_epoch,
                             edge_scale=edge_scale_global,
+                            sampler_ctx=sampler_ctx,
+                            steps_per_epoch=steps_per_epoch,
                         )
                         ax.get_timers().stop("prefetch launch")
                     else:
@@ -1399,6 +1949,8 @@ if __name__ == "__main__":
                             minibatch_seed=minibatch_seed,
                             global_step=global_step,
                             edge_scale=edge_scale_global,
+                            sampler_ctx=sampler_ctx,
+                            steps_per_epoch=steps_per_epoch,
                         )
                     ax.get_timers().stop("minibatch prep")
                 if minibatch is None:
@@ -1410,6 +1962,7 @@ if __name__ == "__main__":
                     mask_to_use,
                     num_nodes_loss,
                     layout_metadata,
+                    node_weight_mb,
                 ) = minibatch
             else:
                 features_mb = features
@@ -1418,6 +1971,7 @@ if __name__ == "__main__":
                 mask_to_use = train_mask
                 num_nodes_loss = num_nodes
                 layout_metadata = full_layout_metadata
+                node_weight_mb = None
 
             ax.get_timers().start("train step")
             with record_function("train"):
@@ -1433,6 +1987,8 @@ if __name__ == "__main__":
                     layout_metadata=layout_metadata,
                     test=args.test,
                     vectorize_dp_grad=args.vectorize_dp_grad,
+                    node_weight=node_weight_mb,
+                    grad_clip_value=args.grad_clip_value,
                 )
             ax.get_timers().stop("train step")
             epoch_loss += float(loss.detach().item())
@@ -1446,6 +2002,9 @@ if __name__ == "__main__":
 
         if i == args.timing_end_epoch:
             print_axonn_timer_data(ax.get_timers().get_times()[0])
+
+        if lr_scheduler is not None:
+            lr_scheduler.step()
 
         log = "Epoch: {:03d}, Train Loss: {:.4f}"
         if dist.get_rank() == 0:
@@ -1469,6 +2028,7 @@ if __name__ == "__main__":
                 num_classes,
                 layout_metadata=full_layout_metadata,
                 multilabel_metric=args.multilabel_metric,
+                degree_local=degree_labels_local,
             )
             if tag < 3:
                 ax.get_timers().stop("eval")
@@ -1491,6 +2051,12 @@ if __name__ == "__main__":
                                 m["total"],
                             )
                         )
+                        if m.get("deg_buckets"):
+                            parts = " ".join(
+                                f"[{lbl}]={acc:.4f}(n={tot})"
+                                for lbl, acc, tot in m["deg_buckets"]
+                            )
+                            print(f"  {split} by-degree: {parts}")
                 if best_valid is not None:
                     train_m = metrics.get("train")
                     val_m = metrics.get("val")
@@ -1503,6 +2069,83 @@ if __name__ == "__main__":
                             )
                         else:
                             best_valid.add(train_m["acc"], val_m["acc"], test_m["acc"])
+
+    if args.grad_variance_samples > 0 and multilabel:
+        if dist.get_rank() == 0:
+            print("[warn] --grad_variance_samples skipped (multilabel not supported).")
+    elif args.grad_variance_samples > 0 and use_minibatch:
+        # Fixed-parameter gradient variance over K fresh mini-batches (E3).
+        # With --grad_variance_ratios, sweep uniform sampling at several
+        # ratios on the SAME frozen parameters (removes the parameter-point
+        # confound between ratios).
+        K = int(args.grad_variance_samples)
+        optim_params_v = [p for g in optimizer.param_groups for p in g["params"]]
+        base_step = args.num_epochs * steps_per_epoch
+        model.train()
+        if args.grad_variance_ratios:
+            sweep = [
+                (float(r), None, _edge_scale_value(
+                    num_nodes, _minibatch_size(num_nodes, None, float(r))
+                ) if args.minibatch_unbiased else None)
+                for r in args.grad_variance_ratios.split(",")
+            ]
+        else:
+            sweep = [(args.minibatch_ratio, sampler_ctx, edge_scale_global)]
+        for ratio_v, ctx_v, escale_v in sweep:
+            g_sum = [torch.zeros_like(p) for p in optim_params_v]
+            g_sq = [torch.zeros_like(p) for p in optim_params_v]
+            n_ok = 0
+            for k in range(K):
+                mb = _prepare_compact_minibatch(
+                    model=model,
+                    data_loader=data_loader,
+                    train_adj_shards=train_adj_shards,
+                    features=features,
+                    labels=labels,
+                    train_mask=train_mask,
+                    num_nodes=num_nodes,
+                    minibatch_nodes=None,
+                    minibatch_ratio=ratio_v,
+                    minibatch_seed=minibatch_seed,
+                    global_step=base_step + k,
+                    edge_scale=escale_v,
+                    sampler_ctx=ctx_v,
+                    steps_per_epoch=steps_per_epoch,
+                )
+                if mb is None:
+                    continue
+                f_mb, y_mb, adj_mb, m_mb, nn_loss, lm, w_mb = mb
+                optimizer.zero_grad()
+                out = model(f_mb, adj_mb, layout_metadata=lm)
+                loss_v = parallel_cross_entropy(
+                    out, y_mb, model.num_gcn_layers, nn_loss, num_classes,
+                    node_mask=m_mb, node_weight=w_mb,
+                )
+                loss_v.backward()
+                sync_norm_gradients(model.norms, mean=plx.avg_grad)
+                _sync_data_parallel_gradients(optimizer, vectorize=False)
+                for p, s, q in zip(optim_params_v, g_sum, g_sq):
+                    if p.grad is not None:
+                        s.add_(p.grad)
+                        q.add_(p.grad * p.grad)
+                n_ok += 1
+            if n_ok > 1:
+                sum_var = torch.zeros(1, device=torch.device("cuda"))
+                sum_mean_sq = torch.zeros(1, device=torch.device("cuda"))
+                for s, q in zip(g_sum, g_sq):
+                    mean = s / n_ok
+                    var = q / n_ok - mean * mean
+                    sum_var += var.clamp_min(0).sum()
+                    sum_mean_sq += (mean * mean).sum()
+                if dist.get_rank() == 0:
+                    rel = (sum_var / sum_mean_sq.clamp_min(1e-30)).item()
+                    print(
+                        f"[grad-variance] ratio={ratio_v} K={n_ok} "
+                        f"sum_var={sum_var.item():.6e} "
+                        f"sum_mean_sq={sum_mean_sq.item():.6e} "
+                        f"relative_var={rel:.4f}",
+                        flush=True,
+                    )
 
     print(f"rank {rank} Peak GPU memory: {torch.cuda.max_memory_allocated() / 1e9:.2f} GB")
     
