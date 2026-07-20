@@ -101,6 +101,7 @@ def _all_reduce_with_optional_lowp(
         reduce_buf = cast_buf.view_as(tensor)
     ax.get_timers().stop("allreduce lowp comm dtype")
     ax.get_timers().start("allreduce lowp")
+    # print(f"allreduce lowp {reduce_buf.shape} {process_group}")
     dist.all_reduce(reduce_buf, group=process_group)
     ax.get_timers().stop("allreduce lowp")
     if reduce_buf is not tensor:
@@ -289,7 +290,7 @@ class GCNConvFunction(torch.autograd.Function):
         # gather features if sharded
         if gather_features:
             ax.get_timers().start("Allgather F")
-            _log_collective_message_size("allgather", x, "F", all_gather_group)
+            # _log_collective_message_size("allgather", x, "F", all_gather_group)
             H = _gather(x, dim=0, process_group=all_gather_group)
             ax.get_timers().stop("Allgather F")
             H = H.reshape(local_features_shape)
@@ -357,6 +358,7 @@ class GCNConvFunction(torch.autograd.Function):
                 ax.get_timers().start("AGG = A * H")
                 AGG = _spmm(edge_index, H)
                 ax.get_timers().stop("AGG = A * H")
+                _log_collective_message_size("all_reduce", AGG, "H", aggregation_all_reduce_group)
                 ax.get_timers().start("allreduce H")
                 _all_reduce_with_optional_lowp(
                     AGG, aggregation_all_reduce_group, enable_lowp=True
@@ -401,7 +403,7 @@ class GCNConvFunction(torch.autograd.Function):
 
         # all reduce output of layer
         # TODO "OUT"
-        # _log_collective_message_size("all_reduce", OUT, "OUT", combination_all_reduce_group)
+        _log_collective_message_size("all_reduce", OUT, "Q", combination_all_reduce_group)
         ax.get_timers().start("allreduce Q")
         _all_reduce_with_optional_lowp(
             OUT, combination_all_reduce_group, enable_lowp=True
@@ -587,6 +589,7 @@ class GCNConvFunction(torch.autograd.Function):
                     grad_agg_done_event.record(comm_stream)
                 ax.get_timers().stop("all-reduce launch")
             else:
+                _log_collective_message_size("all_reduce", grad_agg, "bwd_agg", ctx.backward_all_reduce_group)
                 _all_reduce_with_optional_lowp(
                     grad_agg, ctx.backward_all_reduce_group, enable_lowp=True
                 )
@@ -642,6 +645,7 @@ class GCNConvFunction(torch.autograd.Function):
                 ax.get_timers().stop("ReduceScatter grad_x")
             else:
                 ax.get_timers().start("allreduce grad_x")
+                _log_collective_message_size("all_reduce", grad_x, "bwd_x", ctx.backward_depth_group)
                 _all_reduce_with_optional_lowp(
                     grad_x, ctx.backward_depth_group, enable_lowp=True
                 )

@@ -168,6 +168,11 @@ def _log_collective_message_size(op_type, tensor, step_tag, process_group):
         process_group: torch.distributed group for the collective
     """
 
+    # Opt-in only: this instrumentation posts extra collectives and CPU syncs
+    # on the hot path. Enable with PLEXUS_COMM_LOG_ENABLE=1.
+    if not os.environ.get("PLEXUS_COMM_LOG_ENABLE"):
+        return
+
     try:
         is_dist = dist.is_initialized()
         world_rank = dist.get_rank() if is_dist else 0
@@ -196,6 +201,8 @@ def _log_collective_message_size(op_type, tensor, step_tag, process_group):
             num_bytes = tensor_view.numel() * tensor_view.element_size()
             size_mb = num_bytes / (1024.0 * 1024.0)
 
+            # row_nonzero[r] == True iff row r has at least one nonzero on THIS
+            # rank; used below to compute the union zero-row ratio over the group.
             if tensor_view.is_sparse:
                 dense_elements = 1
                 for dim in tensor_view.shape:
@@ -205,12 +212,19 @@ def _log_collective_message_size(op_type, tensor, step_tag, process_group):
 
                 if tensor_view.layout == torch.sparse_csr:
                     crow = tensor_view.crow_indices()
-                    zero_rows = torch.sum((crow[1:] - crow[:-1]) == 0).item()
+                    row_counts = crow[1:] - crow[:-1]
+                    zero_rows = torch.sum(row_counts == 0).item()
                     total_rows = tensor_view.size(0)
+                    row_nonzero = row_counts > 0
                 else:
                     total_rows = tensor_view.size(0)
                     row_indices = tensor_view.indices()[0]
                     zero_rows = int(total_rows - torch.unique(row_indices).numel())
+                    row_nonzero = torch.zeros(
+                        total_rows, dtype=torch.bool, device=tensor_view.device
+                    )
+                    if row_indices.numel() > 0:
+                        row_nonzero[row_indices] = True
             else:
                 total_elements = tensor_view.numel()
                 non_zero_elements = torch.count_nonzero(tensor_view).item()
@@ -218,14 +232,17 @@ def _log_collective_message_size(op_type, tensor, step_tag, process_group):
                 if tensor_view.dim() == 0:
                     total_rows = 1
                     zero_rows = int(non_zero_elements == 0)
+                    row_nonzero = tensor_view.reshape(1) != 0
                 elif tensor_view.dim() == 1:
                     total_rows = tensor_view.size(0)
                     zero_rows = int(non_zero_elements == 0)
+                    row_nonzero = tensor_view != 0
                 else:
                     total_rows = tensor_view.size(0)
                     reshaped = tensor_view.reshape(total_rows, -1)
                     non_zero_per_row = torch.sum(reshaped != 0, dim=1)
                     zero_rows = torch.sum(non_zero_per_row == 0).item()
+                    row_nonzero = non_zero_per_row > 0
 
             sparsity = (
                 (total_elements - non_zero_elements) / total_elements
@@ -234,6 +251,20 @@ def _log_collective_message_size(op_type, tensor, step_tag, process_group):
             )
 
             zero_row_ratio = (zero_rows / total_rows) if total_rows > 0 else 0.0
+
+            # Union zero-row ratio: fraction of rows that are zero on EVERY rank
+            # in the group. These rows stay zero in the all-reduce output, so this
+            # is the upper bound on what a row-sparse all-reduce could save.
+            union_total_rows = row_nonzero.numel()
+            if is_dist and group_size > 1:
+                row_any = row_nonzero.to(torch.int32)
+                dist.all_reduce(row_any, op=dist.ReduceOp.SUM, group=process_group)
+                union_zero_rows = int((row_any == 0).sum().item())
+            else:
+                union_zero_rows = int((~row_nonzero).sum().item())
+            union_zero_row_ratio = (
+                union_zero_rows / union_total_rows if union_total_rows > 0 else 0.0
+            )
 
             stats_tensor = torch.tensor(
                 [sparsity, zero_row_ratio],
@@ -278,6 +309,7 @@ def _log_collective_message_size(op_type, tensor, step_tag, process_group):
                 "group_members": sorted(group_members),
                 "sparsity": sparsity_values,
                 "zero_row_ratio": zero_row_ratio_values,
+                "union_zero_row_ratio": union_zero_row_ratio,
                 "size_mb": size_mb,
             }
 
@@ -304,9 +336,14 @@ def _log_collective_message_size(op_type, tensor, step_tag, process_group):
         group_count = len(payloads)
         group_column_name = f"group_{group_count}"
         zero_row_column_name = f"{group_column_name}_zero_row_ratio"
+        union_zero_row_column_name = f"{group_column_name}_union_zero_row_ratio"
         sparsity_matrix = [group_payload["sparsity"] for group_payload in payloads]
         zero_row_ratio_matrix = [
             group_payload["zero_row_ratio"] for group_payload in payloads
+        ]
+        # one value per group (identical across ranks within a group)
+        union_zero_row_ratio_vector = [
+            group_payload["union_zero_row_ratio"] for group_payload in payloads
         ]
 
         with open(log_path, mode="a", newline="") as csvfile:
@@ -319,6 +356,7 @@ def _log_collective_message_size(op_type, tensor, step_tag, process_group):
                     "size_mb",
                     group_column_name,
                     zero_row_column_name,
+                    union_zero_row_column_name,
                 ]
                 writer.writerow(header)
 
@@ -329,6 +367,7 @@ def _log_collective_message_size(op_type, tensor, step_tag, process_group):
                 f"{payloads[0]['size_mb']:.6f}",
                 json.dumps(sparsity_matrix),
                 json.dumps(zero_row_ratio_matrix),
+                json.dumps(union_zero_row_ratio_vector),
             ]
 
             writer.writerow(row)

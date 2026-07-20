@@ -85,6 +85,6 @@ lr=0.002
         python -u $SCRIPT"
 
     echo $run_cmd
-    eval $run_cmd > reddit/reddit_c${G_INTRA_R}_${G_INTRA_C}_${G_INTRA_D}_${G_DATA}_${ratio}_${lr}_${dropout}.log 2>&1
+    eval $run_cmd
     # done
 done

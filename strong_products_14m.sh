@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -q premium
+#SBATCH -q regular
 #SBATCH --time=00:10:00
 #SBATCH --gpus-per-node=4
 #SBATCH -A m5083
@@ -42,7 +42,7 @@ ratio=${5:-0.05}
 
 TRAIN_FILE=examples/train_mini.py
 PARTITIONS_PER_DIM=32
-PARTITIONED_DATA_DIR=/pscratch/sd/c/cunyang/gnn/plexus/dataset/amazon_14m/amazon_part${PARTITIONS_PER_DIM}
+PARTITIONED_DATA_DIR=/global/cfs/cdirs/m5083/gnn_dataset/amazon_14m/amazon_part${PARTITIONS_PER_DIM}
 
 export CXX=CC 
 export CC=cc
@@ -95,4 +95,4 @@ SCRIPT="$TRAIN_FILE \
         python -u $SCRIPT"
 
     echo $run_cmd
-    eval $run_cmd > strong/products_14m_sampopt/products_14m_G_INTRA_R${G_INTRA_R}_G_INTRA_C${G_INTRA_C}_G_INTRA_D${G_INTRA_D}_G_DATA${G_DATA}_ratio${ratio}.log 2>&1
+    eval $run_cmd
