@@ -20,15 +20,21 @@ class DataLoader:
         self,
         data_dir: str,
         num_gcn_layers: int,
+        scattered: bool = False,
     ):
         """
         Args:
            data_dir: directory containing the preprocessed data (unpartitioned or partitioned)
            num_gcn_layers: number of gcn layers in the model
+           scattered: load for the scattered activation layout (GCNConvRS):
+               node dim padded to divide the full P grid, features with FULL
+               columns and rows split by the layer-0 nesting, labels/masks
+               split by the final layer's nesting.
         """
 
         self.data_dir = data_dir
         self.num_gcn_layers = num_gcn_layers
+        self.scattered = bool(scattered)
 
         # Determine if data is partitioned based on the existence of metadata.pt
         self.partitioned = os.path.exists(os.path.join(data_dir, "metadata.pt"))
@@ -60,22 +66,38 @@ class DataLoader:
 
         num_gpus, ranks, _ = get_process_groups_info(("z", "x", "y"))
 
-        # following calculations are to get the indices that will be used
-        # to shard the input features matrix
+        if self.scattered:
+            # scattered layout (GCNConvRS): one padded node count divisible
+            # by the full grid P is used consistently everywhere; input
+            # features keep FULL columns and rows follow layer-0 nesting.
+            from plexus.scattered import scattered_bounds
 
-        num_nodes_step = pad_dimension(self.num_nodes, num_gpus[1]) // num_gpus[1]
-        num_features_step = (
-            pad_dimension(self.num_features, num_gpus[2], num_gpus[0]) // num_gpus[2]
-        )
+            P = num_gpus[0] * num_gpus[1] * num_gpus[2]
+            self.padded_num_nodes = pad_dimension(self.num_nodes, P)
+            self.nodes_start, self.nodes_stop = scattered_bounds(
+                self.padded_num_nodes, layer_num=0
+            )
+            self.features_start, self.features_stop = 0, self.num_features
+        else:
+            # following calculations are to get the indices that will be used
+            # to shard the input features matrix
 
-        self.nodes_start, self.nodes_stop = (
-            ranks[1] * num_nodes_step,
-            (ranks[1] + 1) * num_nodes_step,
-        )
-        self.features_start, self.features_stop = (
-            ranks[2] * num_features_step,
-            (ranks[2] + 1) * num_features_step,
-        )
+            num_nodes_step = (
+                pad_dimension(self.num_nodes, num_gpus[1]) // num_gpus[1]
+            )
+            num_features_step = (
+                pad_dimension(self.num_features, num_gpus[2], num_gpus[0])
+                // num_gpus[2]
+            )
+
+            self.nodes_start, self.nodes_stop = (
+                ranks[1] * num_nodes_step,
+                (ranks[1] + 1) * num_nodes_step,
+            )
+            self.features_start, self.features_stop = (
+                ranks[2] * num_features_step,
+                (ranks[2] + 1) * num_features_step,
+            )
 
         depth_step = (
             pad_dimension(
@@ -110,14 +132,22 @@ class DataLoader:
                 labels_group = "x"
         labels_gpu_idx = group_to_idx[labels_group]
 
-        self.labels_start = ranks[labels_gpu_idx] * (
-            pad_dimension(self.num_nodes, num_gpus[labels_gpu_idx])
-            // num_gpus[labels_gpu_idx]
-        )
-        self.labels_stop = (ranks[labels_gpu_idx] + 1) * (
-            pad_dimension(self.num_nodes, num_gpus[labels_gpu_idx])
-            // num_gpus[labels_gpu_idx]
-        )
+        if self.scattered:
+            # labels/masks follow the final layer's scattered nesting
+            from plexus.scattered import scattered_bounds
+
+            self.labels_start, self.labels_stop = scattered_bounds(
+                self.padded_num_nodes, layer_num=self.num_gcn_layers
+            )
+        else:
+            self.labels_start = ranks[labels_gpu_idx] * (
+                pad_dimension(self.num_nodes, num_gpus[labels_gpu_idx])
+                // num_gpus[labels_gpu_idx]
+            )
+            self.labels_stop = (ranks[labels_gpu_idx] + 1) * (
+                pad_dimension(self.num_nodes, num_gpus[labels_gpu_idx])
+                // num_gpus[labels_gpu_idx]
+            )
 
         # following calculations are for indices to get
         # all of the adjacency matrix shards
@@ -143,8 +173,17 @@ class DataLoader:
             )
             rank1, rank2 = ranks[dim1_idx], ranks[dim2_idx]
 
-            dim1_step = pad_dimension(self.num_nodes, dim1_num_gpus) // dim1_num_gpus
-            dim2_step = pad_dimension(self.num_nodes, dim2_num_gpus) // dim2_num_gpus
+            if self.scattered:
+                # one consistent padded node count divisible by all axes
+                dim1_step = self.padded_num_nodes // dim1_num_gpus
+                dim2_step = self.padded_num_nodes // dim2_num_gpus
+            else:
+                dim1_step = (
+                    pad_dimension(self.num_nodes, dim1_num_gpus) // dim1_num_gpus
+                )
+                dim2_step = (
+                    pad_dimension(self.num_nodes, dim2_num_gpus) // dim2_num_gpus
+                )
 
             dim1_start, dim1_stop = (
                 rank1 * dim1_step,

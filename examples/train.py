@@ -13,12 +13,22 @@ from axonn.intra_layer.communication import Drop, Gather
 from plexus import plexus as plx
 import torch.distributed as dist
 from plexus.gcn_conv import GCNConv
+from plexus.gat_conv import GATConv
 from plexus.linear import PlexusLinear
 from plexus.linear_3d import Plexus3DLinear
 from plexus.norm import PlexusRMSNorm
 from plexus.utils.dataloader import DataLoader
 from plexus.cross_entropy import parallel_cross_entropy, parallel_bce_with_logits
 from plexus.utils.general import set_seed, print_axonn_timer_data, get_process_groups_info
+from plexus.gcn_conv_rs import GCNConvRS
+from plexus.scattered import (
+    ScatteredLinear,
+    ScatteredRMSNorm,
+    scattered_cross_entropy,
+    scattered_argmax,
+    sync_replicated_gradients,
+    intra_group,
+)
 
 
 # arguments
@@ -85,6 +95,26 @@ def create_parser():
     parser.add_argument("--multilabel_metric", type=str, default="rocauc",
         choices=["rocauc", "f1_micro"],
         help="Metric for multi-label evaluation: rocauc (default, for ogbn-proteins) or f1_micro (for yelp).")
+
+    # GNN model selection
+    parser.add_argument("--model", type=str, default="gcn", choices=["gcn", "gat"],
+        help="GNN type used for the message-passing stack (default: gcn).")
+    parser.add_argument("--conv", type=str, default="gcn", choices=["gcn", "rs"],
+        help="Parallelization of the GCN stack: 'gcn' = current 3D all-reduce "
+             "scheme, 'rs' = hybrid half-collective scheme (GCNConvRS, "
+             "scattered activations, 3D SpMM + row-parallel GEMM).")
+    parser.add_argument("--allreduce_lowp", action="store_true", default=False,
+        help="Low-precision wire dtype for the large collectives "
+             "(all-reduce in the gcn path; RS/AG/A2A in the rs path).")
+    parser.add_argument("--allreduce_lowp_dtype", type=str, default="bf16",
+        choices=["bf16", "fp16"])
+    parser.add_argument("--overlap_bwd_comm", action="store_true", default=False,
+        help="rs path: overlap the backward AG(grad_agg) with grad_W work.")
+    parser.add_argument("--num_heads", type=int, default=1,
+        help="GAT attention heads. hidden_size must be divisible by num_heads "
+             "(per-head dim = hidden_size / num_heads, concat=True).")
+    parser.add_argument("--negative_slope", type=float, default=0.2,
+        help="LeakyReLU slope used inside GAT attention scoring.")
     return parser
 
 
@@ -100,10 +130,39 @@ class Net(torch.nn.Module):
         hidden_size,
         output_size,
         train_features: bool = False,
+        model: str = "gcn",
+        negative_slope: float = 0.2,
+        num_heads: int = 1,
+        conv: str = "gcn",
     ):
         super(Net, self).__init__()
 
         self.num_gcn_layers = num_gcn_layers
+        self.model = model
+        self.conv = conv
+
+        if conv == "rs":
+            # hybrid half-collective scheme: scattered activations
+            # (padded_N/P rows x full feature cols); linears/norms are
+            # local with replicated weights.
+            assert model == "gcn", "--conv rs currently supports --model gcn"
+            assert not train_features, "--conv rs does not support --train_features yet"
+            # grid (1,1,P): both node axes trivial -> featpar (fixed axes,
+            # A fully replicated, SpMM feature-parallel and local)
+            num_gpus_xyz, _, _ = get_process_groups_info(("x", "y", "z"))
+            self.rs_fixed_axes = (num_gpus_xyz[0] == 1
+                                  and num_gpus_xyz[1] == 1)
+            self.input_linear = ScatteredLinear(input_size, hidden_size)
+            self.layers = torch.nn.ModuleList(
+                [GCNConvRS(hidden_size, hidden_size, i, gemm_1d=True,
+                           fixed_axes=self.rs_fixed_axes)
+                 for i in range(num_gcn_layers)]
+            )
+            self.norms = torch.nn.ModuleList(
+                [ScatteredRMSNorm(hidden_size) for _ in range(num_gcn_layers)]
+            )
+            self.output_linear = ScatteredLinear(hidden_size, output_size)
+            return
 
         node_group, class_group = _loss_groups(self.num_gcn_layers)
         last_outer, _, _ = _layer_groups(self.num_gcn_layers - 1)
@@ -132,18 +191,34 @@ class Net(torch.nn.Module):
                 gather_features_in_depth=train_features,
             )
 
-        # GCN stack: all hidden -> hidden
-        self.layers = torch.nn.ModuleList(
-            [
-                GCNConv(
-                    hidden_size,
-                    hidden_size,
-                    i,
-                    shard_features_in_depth=False,
-                )
-                for i in range(self.num_gcn_layers)
-            ]
-        )
+        # Message-passing stack: pick GCNConv or GATConv based on --model.
+        if model == "gat":
+            self.layers = torch.nn.ModuleList(
+                [
+                    GATConv(
+                        hidden_size,
+                        hidden_size,
+                        i,
+                        heads=num_heads,
+                        shard_features_in_depth=False,
+                        negative_slope=negative_slope,
+                        bias=True,
+                    )
+                    for i in range(self.num_gcn_layers)
+                ]
+            )
+        else:
+            self.layers = torch.nn.ModuleList(
+                [
+                    GCNConv(
+                        hidden_size,
+                        hidden_size,
+                        i,
+                        shard_features_in_depth=False,
+                    )
+                    for i in range(self.num_gcn_layers)
+                ]
+            )
         self.norms = torch.nn.ModuleList(
             [
                 PlexusRMSNorm(
@@ -196,6 +271,10 @@ class Net(torch.nn.Module):
     #     return x
     
     def forward(self, x, edge_index_shards):
+        if getattr(self, "rs_fixed_axes", False):
+            # featpar: every layer uses the layer-0 (full-A) shard
+            edge_index_shards = edge_index_shards[:1]
+
         ax.get_timers().start("input_linear")
         x = self.input_linear(x)
         ax.get_timers().stop("input_linear")
@@ -227,6 +306,7 @@ def train(
     train_mask,
     num_nodes,
     num_classes,
+    padded_num_nodes=None,
 ):
     # set to training mode
     model.train()
@@ -257,7 +337,18 @@ def train(
         # forward pass
         output = model(features_local, adj_shards)
 
-        if labels.ndim == 2 and labels.size(-1) > 1:
+        if getattr(model, "conv", "gcn") == "rs":
+            assert labels.ndim == 1 or labels.size(-1) == 1, \
+                "--conv rs does not support multilabel losses yet"
+            loss = scattered_cross_entropy(
+                output,
+                labels,
+                padded_num_nodes,
+                num_nodes,
+                model.num_gcn_layers,
+                node_mask=train_mask,
+            )
+        elif labels.ndim == 2 and labels.size(-1) > 1:
             # Multi-label (e.g., ogbn-proteins): BCE-with-logits on raw scores.
             loss = parallel_bce_with_logits(
                 output,
@@ -280,6 +371,10 @@ def train(
 
         # backward pass
         loss.backward()
+
+    # replicated-weight grads (scattered linears/norms) sum over the grid
+    if getattr(model, "conv", "gcn") == "rs":
+        sync_replicated_gradients(model)
 
     # update weights
     optimizer.step()
@@ -463,7 +558,27 @@ def evaluate(
     num_nodes,
     num_classes,
     multilabel_metric="rocauc",
+    padded_num_nodes=None,
 ):
+    if getattr(model, "conv", "gcn") == "rs":
+        # scattered layout: local argmax over full classes; metrics
+        # reduced over the whole intra-layer group (rows on all P ranks)
+        assert labels.ndim == 1 or labels.size(-1) == 1, \
+            "--conv rs does not support multilabel evaluation yet"
+        model.eval()
+        logits = model(features_local, adj_shards)
+        pred = scattered_argmax(
+            logits, padded_num_nodes, num_nodes, model.num_gcn_layers
+        )
+        results = {}
+        if masks is None:
+            return results
+        for split in ("train", "val", "test"):
+            results[split] = _compute_split_metrics(
+                pred, labels, masks.get(split), num_classes, intra_group()
+            )
+        return results
+
     groups = _loss_groups(model.num_gcn_layers)
     _, _, process_groups = get_process_groups_info(groups)
     node_group = process_groups[0]
@@ -576,6 +691,9 @@ if __name__ == "__main__":
         overlap_aggregation=args.overlap_aggregation,
         tune_gemms=args.tune_gemms,
         use_3d_linear_flag=args.use_3d_linear,
+        allreduce_low_precision=args.allreduce_lowp,
+        allreduce_low_precision_dtype=args.allreduce_lowp_dtype,
+        overlap_bwd_comm_flag=args.overlap_bwd_comm,
         activation_checkpointing=args.activation_checkpoint,
         no_adj_transpose_flag=args.no_adj_transpose,
         int32_csr_indices=args.int32_indices,
@@ -583,7 +701,9 @@ if __name__ == "__main__":
     )
 
     # initialize parallel data loader
-    data_loader = DataLoader(args.data_dir, args.num_gcn_layers)
+    data_loader = DataLoader(
+        args.data_dir, args.num_gcn_layers, scattered=(args.conv == "rs")
+    )
 
     # get the dataset which includes graph, features, and output labels
     (
@@ -600,6 +720,15 @@ if __name__ == "__main__":
         train_features=args.train_features,
     )
     
+    if args.model == "gat" and args.hidden_size % args.num_heads != 0:
+        raise ValueError(
+            f"--hidden_size ({args.hidden_size}) must be divisible by "
+            f"--num_heads ({args.num_heads}) for GAT (per-head dim = "
+            f"hidden_size / num_heads with concat=True)."
+        )
+
+    padded_num_nodes = getattr(data_loader, "padded_num_nodes", None)
+
     # create the model and move to gpu
     model = Net(
         args.num_gcn_layers,
@@ -607,6 +736,10 @@ if __name__ == "__main__":
         args.hidden_size,
         num_classes,
         train_features=args.train_features,
+        model=args.model,
+        negative_slope=args.negative_slope,
+        num_heads=args.num_heads,
+        conv=args.conv,
     ).to(torch.device("cuda"))
 
     # create optimizer for parameters
@@ -677,6 +810,7 @@ if __name__ == "__main__":
             train_mask,
             num_nodes,
             num_classes,
+            padded_num_nodes=padded_num_nodes,
         )
 
         if i >= args.timing_start_epoch and i <= args.timing_end_epoch:
@@ -705,6 +839,7 @@ if __name__ == "__main__":
                 num_nodes,
                 num_classes,
                 multilabel_metric=args.multilabel_metric,
+                padded_num_nodes=padded_num_nodes,
             )
             if dist.get_rank() == 0:
                 for split, m in metrics.items():
